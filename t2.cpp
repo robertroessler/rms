@@ -23,11 +23,13 @@ int main(int argc, char* argv[])
 	// sub should be EMPTY
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// publish message sub is NOT subscribed to...
-	cout << "rms::put_with_tag => " << publisher::put_with_tag("y", "z") << endl;
+	string z = "z"; // (for use as a std::string value param)
+	cout << "rms::put_with_tag => " << publisher::put_with_tag("y", z) << endl;
 	// ... so sub should be STILL be empty
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// publish 4 messages with 2 strings, 1 int, and 1 long long payload
-	cout << "rms::put_with_tag => " << publisher::put_with_tag("b", "a") << endl;
+	char a[] = { 'a' }; // (for use as a char* param)
+	cout << "rms::put_with_tag => " << publisher::put_with_tag("b", a) << endl;
 	// sub should NOT be empty...
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	cout << "rms::put_with_tag " << publisher::put_with_tag("d", "ab") << endl;
