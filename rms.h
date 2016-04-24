@@ -32,7 +32,7 @@
 #include <mutex>
 #include <thread>
 #include <string>
-#include <tuple>
+#include <utility>
 
 #ifdef RMSDLL_EXPORTS
 #define RMS_EXPORT extern "C" __declspec(dllexport)
@@ -502,6 +502,10 @@ public:
 	static int put_tag(T t) { return rms_publish_bytes(tagValue(t), NULL, 0); }
 };
 
+// alias template for RMs data/tag pairs (tag is ALWAYS a std::string)
+template<typename T>
+using rms_pair = std::pair<T, std::string>;
+
 /*
 	The subscription is the object used by all consumers of published data in
 	the RMs messaging system, allowing for "subscribing" to (or "expressing an
@@ -562,13 +566,22 @@ public:
 	}
 	// get BOTH next typed DATA item and TAG from queue
 	template<typename T>
-	std::tuple<T, std::string> get_with_tag() {
+	rms_pair<T> get_with_tag() {
 		std::string tag;
 		T data;
 		if (id)
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetTag | RMsGetData);
-		return std::make_tuple(data, tag);
+		return std::make_pair(data, tag);
 	}
+
+	// get next typed DATA item in queue (extraction operator >>)
+	template<typename T>
+	subscription& operator>>(T& data) { data = get<T>(); return *this; }
+	// get next TAG item in queue (extraction operator >=)
+	subscription& operator>=(std::string& tag) { tag = get_tag(); return *this; }
+	// get BOTH next typed DATA item and TAG from queue (extraction operator >>)
+	template<typename T>
+	subscription& operator>>(rms_pair<T>& p) { p = get_with_tag<T>(); return *this; }
 
 private:
 	std::atomic<int> id = 0;			// our subscription queue ID
