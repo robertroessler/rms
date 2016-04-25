@@ -318,7 +318,7 @@ private:
 				break;
 		return i;
 	}
-	// RMs ptr -> RMs ptr' with data length n
+	// RMs ptr -> RMs ptr' with encoded data length n
 	inline rms_ptr_t rp2rp(rms_ptr_t rp, int n) const
 	{
 		const int i = ty2logM1(rp2ty(rp));
@@ -339,6 +339,26 @@ private:
 
 extern RMsRoot* rmsRoot;				// shared "root" object
 
+//	RMs ptr -> actual data length
+inline int rp2n(rms_ptr_t rp)
+{
+	const int i = ty2logM1(rp2ty(rp));
+	const int n = rp & ((2 << i) - 1);
+	return n ? n : (2 << i);
+}
+
+//	construct and return the appropriate "rvalue" from RMs ptr
+template<typename U>
+inline U getRValue(rms_ptr_t rp)
+{
+	return *(U*)rp2xp(rp);
+}
+template<>
+inline std::string getRValue(rms_ptr_t rp)
+{
+	return std::string((const char*)rp2xp(rp), rp2n(rp));
+}
+
 /*
 	RMsQueue is the controlling object for a "subscription", orchestrating all
 	lower-level publication/subscription activities.
@@ -354,18 +374,6 @@ class RMsQueue {
 	typedef struct {
 		td_pair_t pqTD[512];			// [4kb] page of [RMs] td_pair_t
 	} pq_pag_t;
-
-	// construct and return the appropriate "rvalue" from RMs ptr
-	template<typename U>
-	inline U getRValue(rms_ptr_t rp) const
-	{
-		return *(U*)rp2xp(rp);
-	}
-	template<>
-	inline std::string getRValue(rms_ptr_t rp) const
-	{
-		return std::string((const char*)rp2xp(rp), rp2n(rp));
-	}
 
 public:
 	RMsQueue() {}
@@ -437,13 +445,6 @@ private:
 	inline int qp2pq(int p) const { return (p - NQuick) >> 9; }
 	// RMs queue read/write pointer -> queue indirect page index
 	inline int qp2pi(int p) const { return (p - NQuick) & 0x1ff; }
-	// RMs ptr -> actual data length
-	inline int rp2n(rms_ptr_t rp) const
-	{
-		const int i = ty2logM1(rp2ty(rp));
-		const int n = rp & ((2 << i) - 1);
-		return n ? n : (2 << i);
-	}
 
 	std::atomic<int> magic = QueueMagic;// our magic number ('RMsQ')
 	RSpinLock spin;						// our spinlock
