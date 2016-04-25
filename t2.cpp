@@ -28,7 +28,7 @@ int main(int argc, char* argv[])
 	// ... so sub should be STILL be empty
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// publish 4 messages with 2 strings, 1 int, and 1 long long payload
-	char a[] = { 'a' }; // (for use as a char* param)
+	char a[] = "a"; // (for use as a char* param, equiv to { 'a', 0 })
 	cout << "rms::put_with_tag => " << publisher::put_with_tag("b", a) << endl;
 	// sub should NOT be empty...
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;

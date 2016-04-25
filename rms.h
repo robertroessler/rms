@@ -470,16 +470,7 @@ int initialize(int np);
 	to match with subscriptions for delivery.
 */
 class publisher {
-	// return the CORRECTLY typed tag value for all "publish" operations
-	template<typename U>
-	static inline const char* tagValue(U t) { static_assert(sizeof(U) == 0, "Unsupported tag data type!"); }
-	template<>
-	static inline const char* tagValue(char* t) { return t; }
-	template<>
 	static inline const char* tagValue(const char* t) { return t; }
-	template<>
-	static inline const char* tagValue(std::string t) { return t.c_str(); }
-	template<>
 	static inline const char* tagValue(const std::string& t) { return t.c_str(); }
 
 public:
