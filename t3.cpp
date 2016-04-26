@@ -23,12 +23,12 @@ int main(int argc, char* argv[])
 	// sub should be EMPTY
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// publish message sub is NOT subscribed to...
-	string z = "z"; // (for use as a std::string value param)
+	string x, y, z = "z"; // (for use as a std::string value params)
 	cout << "rms::put_with_tag => " << publisher::put_with_tag("y", z) << endl;
 	// ... so sub should be STILL be empty
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// publish 4 messages with 2 strings, 1 int, and 1 long long payload
-	char a[] = "a"; // (for use as a char* param, equiv to { 'a', 0 })
+	char a[] = { 'a', 0 }; // (for use as a char* param)
 	cout << "rms::put_with_tag => " << publisher::put_with_tag("b", a) << endl;
 	// sub should NOT be empty...
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
@@ -39,11 +39,13 @@ int main(int argc, char* argv[])
 	cout << "rms::put_with_tag " << publisher::put_with_tag(84LL, "ad") << endl;
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// ... until AFTER the next 4 "gets"...
-	cout << "rms::get() => " << sub.get<string>() << endl;
-	cout << "rms::get() => " << sub.get<string>() << endl;
-	auto t32 = sub.get_with_tag<int>();
+	sub >> x >> y;
+	cout << "rms::operator>> => " << x << endl;
+	cout << "rms::operator>> => " << y << endl;
+	rms_pair<int> t32;		// (for use as "extraction operator" targets)
+	rms_pair<long long> t64;
+	sub >> t32 >> t64;
 	cout << "rms::get_with_tag() => " << t32.first << ':' << t32.second << endl;
-	auto t64 = sub.get_with_tag<long long>();
 	cout << "rms::get_with_tag() => " << t64.first << ':' << t64.second << endl;
 	// ... as in, NOW
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
@@ -55,7 +57,7 @@ int main(int argc, char* argv[])
 			publisher::put_with_tag(42LL, "tag");
 		// ... and then consume them
 		for (int j = 0; j < Transactions; j++)
-			auto td = sub.get_with_tag<long long>();
+			sub >> t64;
 	}
 	const auto t1 = high_resolution_clock::now();
 	cout << "time for " << Iterations * Transactions << " Publish/Wait pairs = "

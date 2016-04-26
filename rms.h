@@ -32,7 +32,7 @@
 #include <mutex>
 #include <thread>
 #include <string>
-#include <tuple>
+#include <utility>
 
 #ifdef RMSDLL_EXPORTS
 #define RMS_EXPORT extern "C" __declspec(dllexport)
@@ -494,6 +494,10 @@ public:
 	static int put_tag(T t) { return rms_publish_bytes(tagValue(t), NULL, 0); }
 };
 
+// alias template for RMs data/tag pairs (tag is ALWAYS a std::string)
+template<typename T>
+using rms_pair = std::pair<T, std::string>;
+
 /*
 	The subscription is the object used by all consumers of published data in
 	the RMs messaging system, allowing for "subscribing" to (or "expressing an
@@ -503,6 +507,30 @@ public:
 	method, clients then only need to do a typed "get" or "get_with_tag", or a
 	"get_tag", depending on whether they want the data only, the data with the
 	associated tag, or the tag only.
+
+	In addition to the "functional" interface for retrieving data and/or tags
+	from a subscription, there are also the "extraction operator" forms - in
+	C++ standard library terminology... instead of using instance methods on a
+	subscription to perform "get*" operations, we can instead use [overloaded]
+	versions of operator>> (and operator>=).  A key difference is that where we
+	might use something like
+
+	auto td = sub.get_with_tag();
+
+	to get the next data-and-tag pair from sub, we could instead do this:
+
+	rms_pair<int> td;
+	sub >> td;
+
+	While this *might* appear more cumbersome (having to pre-declare the data),
+	consider the case where we want to get multiple data (and/or tags) from the
+	subscription... where we would be required to perform an assignment per each
+	desired item, consider that with the "extraction op" version, we can say:
+
+	rms_pair<int> tx, ty, tz;
+	sub >> tx >> ty >> tz;
+
+	... which most would agree is more concise.
 
 	N.B. - The RMs model is to have only a SINGLE "consuming" thread per/for a
 	given subscription queue... if multiple "reader" threads are desired, then
@@ -554,13 +582,22 @@ public:
 	}
 	// get BOTH next typed DATA item and TAG from queue
 	template<typename T>
-	std::tuple<T, std::string> get_with_tag() {
+	rms_pair<T> get_with_tag() {
 		std::string tag;
 		T data;
 		if (id)
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetTag | RMsGetData);
-		return std::make_tuple(data, tag);
+		return std::make_pair(data, tag);
 	}
+
+	// get next typed DATA item in queue (extraction operator >>)
+	template<typename T>
+	subscription& operator>>(T& data) { data = get<T>(); return *this; }
+	// get next TAG item in queue (extraction operator >=)
+	subscription& operator>=(std::string& tag) { tag = get_tag(); return *this; }
+	// get BOTH next typed DATA item and TAG from queue (extraction operator >>)
+	template<typename T>
+	subscription& operator>>(rms_pair<T>& p) { p = get_with_tag<T>(); return *this; }
 
 private:
 	std::atomic<int> id = 0;			// our subscription queue ID

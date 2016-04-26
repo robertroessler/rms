@@ -1,6 +1,6 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 14
-VisualStudioVersion = 14.0.24720.0
+VisualStudioVersion = 14.0.25123.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RMsDLL", "RMsDLL\RMsDLL.vcxproj", "{AB8DCC85-A131-4AC4-847E-795A821FAE17}"
 EndProject
@@ -11,6 +11,8 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "t2", "t2\t2.vcxproj", "{24FBC7FA-D261-4332-823A-DBFDA6D875E0}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RGlobStatic", "..\RGlob-trunk\RGlobStatic\RGlobStatic.vcxproj", "{4AAA19AD-D112-4954-BF57-E26FB0DC850A}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "t3", "t3\t3.vcxproj", "{8AA183CE-2AF8-4D79-8538-CABB6625F6F9}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -60,6 +62,14 @@ Global
 		{4AAA19AD-D112-4954-BF57-E26FB0DC850A}.Release|Win32.Build.0 = Release|Win32
 		{4AAA19AD-D112-4954-BF57-E26FB0DC850A}.Release|x64.ActiveCfg = Release|x64
 		{4AAA19AD-D112-4954-BF57-E26FB0DC850A}.Release|x64.Build.0 = Release|x64
+		{8AA183CE-2AF8-4D79-8538-CABB6625F6F9}.Debug|Win32.ActiveCfg = Debug|Win32
+		{8AA183CE-2AF8-4D79-8538-CABB6625F6F9}.Debug|Win32.Build.0 = Debug|Win32
+		{8AA183CE-2AF8-4D79-8538-CABB6625F6F9}.Debug|x64.ActiveCfg = Debug|x64
+		{8AA183CE-2AF8-4D79-8538-CABB6625F6F9}.Debug|x64.Build.0 = Debug|x64
+		{8AA183CE-2AF8-4D79-8538-CABB6625F6F9}.Release|Win32.ActiveCfg = Release|Win32
+		{8AA183CE-2AF8-4D79-8538-CABB6625F6F9}.Release|Win32.Build.0 = Release|Win32
+		{8AA183CE-2AF8-4D79-8538-CABB6625F6F9}.Release|x64.ActiveCfg = Release|x64
+		{8AA183CE-2AF8-4D79-8538-CABB6625F6F9}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
