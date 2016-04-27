@@ -45,8 +45,8 @@ int main(int argc, char* argv[])
 	rms_pair<int> t32;		// (for use as "extraction operator" targets)
 	rms_pair<long long> t64;
 	sub >> t32 >> t64;
-	cout << "rms::get_with_tag() => " << t32.first << ':' << t32.second << endl;
-	cout << "rms::get_with_tag() => " << t64.first << ':' << t64.second << endl;
+	cout << "rms::operator>> => " << t32.first << ':' << t32.second << endl;
+	cout << "rms::operator>> => " << t64.first << ':' << t64.second << endl;
 	// ... as in, NOW
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// INSIDE a loop... 
