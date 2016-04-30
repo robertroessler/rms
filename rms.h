@@ -532,6 +532,20 @@ using rms_pair = std::pair<T, std::string>;
 
 	... which most would agree is more concise.
 
+	Finally, we have the "higher-order access" template functions for supporting
+	"smart" access to subscription data-and-tag streams.  The simpler forms here
+	are the try_get* [mostly] template functions for doing NON-BLOCKING accesses
+	to the subscription queue, first testing for "empty" and/or "end-of-data" on
+	the queue, and then only returning data if it is available AND valid.
+
+	We wrap up these "higher-order access" functions with the for_each* set of
+	queries... note that these perform the same data presence and validity tests
+	of the try_get* group, but also obviate the need for you to use any explicit
+	"looping" constructs to consume the messages in a queue!  Just start with an
+	active subscription, supply a lambda implementing the desired functionality,
+	and this will be SYNCHRONOUSLY invoked for each data, tag, or data/tag pair
+	available in the queue.
+
 	N.B. - The RMs model is to have only a SINGLE "consuming" thread per/for a
 	given subscription queue... if multiple "reader" threads are desired, then
 	multiple subscription objects should be created using the same pattern. On
@@ -555,13 +569,13 @@ public:
 	// force discarding of all undelivered messages in queue
 	int flush() { return id ? ((RMsQueue*)pg2xp(id))->Flush() : 0; }
 	// return whether there is a message waiting (i.e., would a get* block?)
-	bool empty() const { return id ? ((RMsQueue*)pg2xp(id))->Peek() == 0 : true; }
+	bool empty() const { return eod() || ((RMsQueue*)pg2xp(id))->Peek() == 0; }
 	// send an OOB (out of band) signal to any waiting reader
 	int signal(int flags) { return id ? ((RMsQueue*)pg2xp(id))->Signal(flags) : 0; }
 
 	// sign up to receive any published messages with tag matched by pattern
-	void subscribe(const std::string& pattern) { id = RMsQueue::Create(pattern.c_str()); }
-	void subscribe(const char* pattern) { id = RMsQueue::Create(pattern); }
+	void subscribe(const std::string& pattern) { close(), id = RMsQueue::Create(pattern.c_str()); }
+	void subscribe(const char* pattern) { close(), id = RMsQueue::Create(pattern); }
 
 	// get next typed DATA item in queue
 	template<typename T>
@@ -580,7 +594,7 @@ public:
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetTag);
 		return tag;
 	}
-	// get BOTH next typed DATA item and TAG from queue
+	// get next typed DATA item / TAG pair from queue
 	template<typename T>
 	rms_pair<T> get_with_tag() {
 		std::string tag;
@@ -595,9 +609,40 @@ public:
 	subscription& operator>>(T& data) { data = get<T>(); return *this; }
 	// get next TAG item in queue (extraction operator >=)
 	subscription& operator>=(std::string& tag) { tag = get_tag(); return *this; }
-	// get BOTH next typed DATA item and TAG from queue (extraction operator >>)
+	// get next typed DATA item / TAG pair from queue (extraction operator >>)
 	template<typename T>
 	subscription& operator>>(rms_pair<T>& p) { p = get_with_tag<T>(); return *this; }
+
+	// get next typed DATA item in queue IF POSSIBLE (non-blocking)
+	template<typename T>
+	bool try_get(T& data) { return !empty() ? data = get<T>(), true : false; }
+	// get next TAG item in queue IF POSSIBLE (non-blocking)
+	bool try_get_tag(std::string& tag) { return !empty() ? tag = get_tag(), true : false; }
+	// get next typed DATA item / TAG pair from queue IF POSSIBLE (non-blocking)
+	template<typename T>
+	bool try_get_with_tag(rms_pair<T>& p) { return !empty() ? p = get_with_tag<T>(), true : false; }
+
+	// get ALL typed DATA items in queue (blocking)
+	template<typename T, class UnaryFunction>
+	void for_each(UnaryFunction f) {
+		T data;
+		while (data = get<T>(), !eod())
+			f(data);
+	}
+	// get ALL TAG items in queue (blocking)
+	template<class UnaryFunction>
+	void for_each_tag(UnaryFunction f) {
+		std::string tag;
+		while (tag = get_tag(), !eod())
+			f(tag);
+	}
+	// get ALL typed DATA item / TAG pairs in queue (blocking)
+	template<typename T, class UnaryFunction>
+	void for_each_with_tag(UnaryFunction f) {
+		rms_pair<T> pair;
+		while (pair = get_with_tag<T>(), !eod())
+			f(pair);
+	}
 
 private:
 	std::atomic<int> id = 0;			// our subscription queue ID
