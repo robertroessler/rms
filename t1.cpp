@@ -55,12 +55,15 @@ int main(int argc, char* argv[])
 		// ... publish 10 messages...
 		for (int j = 0; j < Transactions; j++)
 			rms_publish_int64("tag", 42LL);
+		long long sum = 0;
 		// ... and then consume them
 		for (int j = 0; j < Transactions; j++) {
 			char t[8];
 			long long d;
 			int nT = sizeof t;
 			rms_wait_int64(id, t, &nT, &d, 3);
+			// do something with the returned data
+			sum += d;
 		}
 	}
 	const DWORD t1 = ::GetTickCount();

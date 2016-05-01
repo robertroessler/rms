@@ -53,9 +53,11 @@ int main(int argc, char* argv[])
 		// ... publish 10 messages...
 		for (int j = 0; j < Transactions; j++)
 			publisher::put_with_tag(42LL, "tag");
+		long long sum = 0;
 		// ... and then consume them
 		for (int j = 0; j < Transactions; j++)
-			auto td = sub.get_with_tag<long long>();
+			// do something with the returned data
+			sum += sub.get_with_tag<long long>().first;
 	}
 	const auto t1 = high_resolution_clock::now();
 	cout << "time for " << Iterations * Transactions << " Publish/Wait pairs = "

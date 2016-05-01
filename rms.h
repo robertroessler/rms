@@ -550,6 +550,17 @@ using rms_pair = std::pair<T, std::string>;
 	given subscription queue... if multiple "reader" threads are desired, then
 	multiple subscription objects should be created using the same pattern. On
 	the other hand, multiple publishers / "writers" are [of course] supported.
+
+	There are other more subtle implications that are influenced by the choice
+	of "threading model"... in general, when only a single thread is involved in
+	sending and receiving messages for a given queue (admittedly a trivial case)
+	it is "safe" to use the [lower-level] get* or the "extraction op" forms for
+	accessing that queue.  However, if multiple threads are interacting in what
+	is fundamentally an ASYNCHRONOUS relationship, then the consuming thread is
+	REQUIRED to check for a queue being in a "signaled" state (reflected in the
+	"end of data" condition) before reading or "trusting" any new data - THIS is
+	where the [higher-order] try_get* and for_each* come into their own, as they
+	implement the required semantics in their accessing logic.
 */
 class subscription {
 public:
@@ -569,7 +580,15 @@ public:
 	// force discarding of all undelivered messages in queue
 	int flush() { return id ? ((RMsQueue*)pg2xp(id))->Flush() : 0; }
 	// return whether there is a message waiting (i.e., would a get* block?)
-	bool empty() const { return eod() || ((RMsQueue*)pg2xp(id))->Peek() == 0; }
+	bool empty() const { return id ? ((RMsQueue*)pg2xp(id))->Peek() == 0 : true; }
+	// compose "eod" and "empty" tests
+	bool eod_or_empty() const {
+		if (id) {
+			auto q = (RMsQueue*)pg2xp(id);
+			return q->State() != 0 || q->Peek() == 0;
+		}
+		return true;
+	}
 	// send an OOB (out of band) signal to any waiting reader
 	int signal(int flags) { return id ? ((RMsQueue*)pg2xp(id))->Signal(flags) : 0; }
 
@@ -615,12 +634,12 @@ public:
 
 	// get next typed DATA item in queue IF POSSIBLE (non-blocking)
 	template<typename T>
-	bool try_get(T& data) { return !empty() ? data = get<T>(), true : false; }
+	bool try_get(T& data) { return !eod_or_empty() ? data = get<T>(), true : false; }
 	// get next TAG item in queue IF POSSIBLE (non-blocking)
-	bool try_get_tag(std::string& tag) { return !empty() ? tag = get_tag(), true : false; }
+	bool try_get_tag(std::string& tag) { return !eod_or_empty() ? tag = get_tag(), true : false; }
 	// get next typed DATA item / TAG pair from queue IF POSSIBLE (non-blocking)
 	template<typename T>
-	bool try_get_with_tag(rms_pair<T>& p) { return !empty() ? p = get_with_tag<T>(), true : false; }
+	bool try_get_with_tag(rms_pair<T>& p) { return !eod_or_empty() ? p = get_with_tag<T>(), true : false; }
 
 	// get ALL typed DATA items in queue (blocking)
 	template<typename T, class UnaryFunction>
