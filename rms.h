@@ -201,7 +201,7 @@ private:
 //	Recursive spinlock class
 class RSpinLockEx {
 public:
-	RSpinLockEx() : nobody(std::thread::id::id()), owner(nobody) {}
+	RSpinLockEx() : nobody(), owner(nobody) {}
 
 	inline void lock() {
 		auto current = std::this_thread::get_id();
@@ -259,7 +259,7 @@ public:
 	}
 
 private:
-	std::atomic<int> count_ = 0;		// synch object
+	std::atomic<int> count_ { 0 };		// synch object
 	std::condition_variable cv;			// condition variable
 	std::mutex mt;						// mutex for above
 };
@@ -446,11 +446,11 @@ private:
 	// RMs queue read/write pointer -> queue indirect page index
 	inline int qp2pi(int p) const { return (p - NQuick) & 0x1ff; }
 
-	std::atomic<int> magic = QueueMagic;// our magic number ('RMsQ')
+	std::atomic<int> magic { QueueMagic };// our magic number ('RMsQ')
 	RSpinLock spin;						// our spinlock
 	RSemaphore semaphore;				// our semaphore
 	rms_ptr_t pattern;					// our pattern
-	std::atomic<int> state = 0;			// our "state"
+	std::atomic<int> state { 0 };			// our "state"
 	volatile int read = 0, write = 0;	// [current] read, write ptrs
 	volatile int pages = 0;				// # of [4kb] indirect queue entry pages
 	volatile int prev = 0, next = 0;	// previous, next queues
@@ -600,7 +600,7 @@ public:
 	subscription& operator>>(rms_pair<T>& p) { p = get_with_tag<T>(); return *this; }
 
 private:
-	std::atomic<int> id = 0;			// our subscription queue ID
+	std::atomic<int> id { 0 };			// our subscription queue ID
 };
 
 }
