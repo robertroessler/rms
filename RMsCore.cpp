@@ -27,16 +27,27 @@
 	POSSIBILITY OF SUCH DAMAGE.
 */
 
+#if defined(WIN32) || defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN		// Exclude rarely-used stuff from Windows headers
 #include <windows.h>
+#endif
+
 #include <cstdio>
-#include "RMs.h"
+#include <sstream>
+#include "rms.h"
 #include "rglob.h"
 
 using namespace std;
 using namespace rms;
 
-static HANDLE rmsM = NULL;				// shared memory mapping object(s)
+//	get "clean" string representation of a std::thread::id
+static inline string threadId2string(thread::id id)
+{
+	ostringstream s;
+	s << hex << id;
+	return s.str();
+}
+
 char* rms::rmsB = NULL;					// shared memory view pointer(s)
 RMsRoot* rms::rmsRoot = NULL;			// shared "root" object
 static int NQPage = 0;					// # of pages of RMsQueue "extras"
@@ -46,10 +57,10 @@ template <typename ...Params>
 static void dumpRoot(Params&&... params) {
 #ifdef DUMP_ROOT
 	char bb[128];
-	const int n = snprintf(bb, sizeof bb, "RMsRoot[%x]::", std::this_thread::get_id());
+	const int n = snprintf(bb, sizeof bb, "RMsRoot[%s]::", threadId2string(std::this_thread::get_id()).c_str());
 	if (n > 0) {
 		snprintf(bb + n, sizeof bb - n, forward<Params>(params)...);
-		::OutputDebugString(bb);
+		fputs(bb, stderr);
 	}
 #endif
 }
@@ -59,10 +70,10 @@ template <typename ...Params>
 static void dumpQueue(Params&&... params) {
 #ifdef DUMP_QUEUE
 	char bb[128];
-	const int n = snprintf(bb, sizeof bb, "RMsQueue[%x]::", std::this_thread::get_id());
+	const int n = snprintf(bb, sizeof bb, "RMsRoot[%s]::", threadId2string(std::this_thread::get_id()).c_str());
 	if (n > 0) {
 		snprintf(bb + n, sizeof bb - n, forward<Params>(params)...);
-		::OutputDebugString(bb);
+		fputs(bb, stderr);
 	}
 #endif
 }
@@ -73,7 +84,7 @@ static void dumpExported(Params&&... params) {
 #ifdef DUMP_EXPORTED
 	char bb[128];
 	snprintf(bb, sizeof bb, forward<Params>(params)...);
-	::OutputDebugString(bb);
+	fputs(bb, stderr);
 #endif
 }
 
@@ -83,7 +94,7 @@ static void dumpCheck(Params&&... params) {
 #if	defined(CHECK_ALLOC_FULL) || defined(CHECK_QUEUE_FULL)
 	char bb[128];
 	snprintf(bb, sizeof bb, forward<Params>(params)...);
-	::OutputDebugString(bb);
+	fputs(bb, stderr);
 #endif
 }
 
@@ -163,6 +174,8 @@ RMS_EXPORT
 int rms_initialize(int np)
 {
 	dumpExported("rms_initialize(%d)...\n", np);
+#if defined(WIN32) || defined(_WIN32)
+	static HANDLE rmsM = NULL;				// shared memory mapping object(s)
 	rmsM = ::CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE|SEC_RESERVE,
 		0, np*4096, NULL);
 	if (rmsM == NULL)
@@ -191,9 +204,15 @@ int rms_initialize(int np)
 			return 0;	// we're OUTTA here!
 		}
 	}
+#else
+// issue a *warning* for "missing virtual alloc support"
+#warning "Missing current platform support code for 'virtual alloc'..."
+// FAIL THE COMPILE for "missing virtual alloc support"
+//static_assert(false, "Missing current platform support code for 'virtual alloc'...");
+#endif
 	// verify [expected] invariants
-	static_assert(sizeof RMsRoot <= 4096, "RMsRoot instance MUST be <= 4096 bytes long!");
-	static_assert(sizeof RMsQueue <= 4096, "RMsQueue instance MUST be <= 4096 bytes long!");
+	static_assert(sizeof(RMsRoot) <= 4096, "RMsRoot instance MUST be <= 4096 bytes long!");
+	static_assert(sizeof(RMsQueue) <= 4096, "RMsQueue instance MUST be <= 4096 bytes long!");
 	// compute any architecture-dependent values
 	NQPage = (4096 - offsetof(RMsQueue, pageE)) / sizeof(unsigned short);
 	dumpExported("rms_initialize(%d) NQPage=%d\n", np, NQPage);
@@ -239,7 +258,7 @@ int rms_publish_ieee(const char* tag, rms_ieee data)
 	if (tag == NULL)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_publish_ieee('%s'...)...Distribute()\n", tag);
-	return rmsRoot->Distribute(tag, &data, sizeof rms_ieee, RMsTypeIeee);
+	return rmsRoot->Distribute(tag, &data, sizeof(rms_ieee), RMsTypeIeee);
 }
 
 RMS_EXPORT
@@ -249,7 +268,7 @@ int rms_publish_int32(const char* tag, rms_int32 data)
 	if (tag == NULL)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_publish_int32('%s'...)...Distribute()\n", tag);
-	return rmsRoot->Distribute(tag, &data, sizeof rms_int32, RMsTypeInt32);
+	return rmsRoot->Distribute(tag, &data, sizeof(rms_int32), RMsTypeInt32);
 }
 
 RMS_EXPORT
@@ -259,7 +278,7 @@ int rms_publish_int64(const char* tag, rms_int64 data)
 	if (tag == NULL)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_publish_int64('%s'...)...Distribute()\n", tag);
-	return rmsRoot->Distribute(tag, &data, sizeof rms_int64, RMsTypeInt64);
+	return rmsRoot->Distribute(tag, &data, sizeof(rms_int64), RMsTypeInt64);
 }
 
 RMS_EXPORT
@@ -321,7 +340,7 @@ int rms_wait_ieee(int id, char tag[], int* tagN, rms_ieee* data, int flags)
 	if ((flags & RMsGetData) && data == NULL)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_ieee(%d...%d)...Wait()\n", id, flags);
-	int dataN = sizeof rms_ieee;
+	int dataN = sizeof(rms_ieee);
 	return ((RMsQueue*)pg2xp(id))->Wait(tag, tagN, data, &dataN, flags);
 }
 
@@ -336,7 +355,7 @@ int rms_wait_int32(int id, char tag[], int* tagN, rms_int32* data, int flags)
 	if ((flags & RMsGetData) && data == NULL)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_int32(%d...%d)...Wait()\n", id, flags);
-	int dataN = sizeof rms_int32;
+	int dataN = sizeof(rms_int32);
 	return ((RMsQueue*)pg2xp(id))->Wait(tag, tagN, data, &dataN, flags);
 }
 
@@ -351,7 +370,7 @@ int rms_wait_int64(int id, char tag[], int* tagN, rms_int64* data, int flags)
 	if ((flags & RMsGetData) && data == NULL)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_int64(%d...%d)...Wait()\n", id, flags);
-	int dataN = sizeof rms_int64;
+	int dataN = sizeof(rms_int64);
 	return ((RMsQueue*)pg2xp(id))->Wait(tag, tagN, data, &dataN, flags);
 }
 
@@ -407,11 +426,18 @@ int RMsRoot::AllocPage()
 				return 0;	// we're OUTTA here!
 			}
 			dumpRoot("AllocPage()...committing %d pages\n", PageIncrement);
+#if defined(WIN32) || defined(_WIN32)
 			if (::VirtualAlloc(rmsB + high*4096, PageIncrement*4096,
 				MEM_COMMIT, PAGE_READWRITE) == NULL) {
 				dumpRoot("AllocPage()...COMMIT FAILED!\n");
 				return 0;	// we're OUTTA here!
 			}
+#else
+// issue a *warning* for "missing virtual alloc support"
+#warning "Missing current platform support code for 'virtual alloc'..."
+// FAIL THE COMPILE for "missing virtual alloc support"
+//static_assert(false, "Missing current platform support code for 'virtual alloc'...");
+#endif
 			committed += PageIncrement;
 		}
 		pg = high++;
@@ -562,8 +588,15 @@ int RMsRoot::Initialize(int np)
 {
 	dumpRoot("Initialize(%d)...\n", np);
 	// do "real" initial COMMIT (re-commits 1st page)
+#if defined(WIN32) || defined(_WIN32)
 	if (!::VirtualAlloc(rmsB, PageIncrement*4096, MEM_COMMIT, PAGE_READWRITE))
 		return 0;	// indicate failure
+#else
+// issue a *warning* for "missing virtual alloc support"
+#warning "Missing current platform support code for 'virtual alloc'..."
+// FAIL THE COMPILE for "missing virtual alloc support"
+//static_assert(false, "Missing current platform support code for 'virtual alloc'...");
+#endif
 	pages = np, committed = PageIncrement;
 	high = 1;	// we ARE the 1st page...
 	dumpRoot("Initialize(%d)...DONE\n", np);
