@@ -227,17 +227,6 @@ private:
 	int count = 0;						// # of [recursive] locks held
 };
 
-//	Helper class supporting "RAII-style" locking
-template<class T>
-class lock_guard {
-public:
-	lock_guard<T>(T& o) : lock_(o) { lock_.lock(); }
-	~lock_guard() { lock_.unlock(); }
-
-private:
-	T& lock_;							// Lock object supporting lock() and unlock()
-};
-
 //	Simple semaphore class
 class RSemaphore {
 public:
@@ -248,18 +237,21 @@ public:
 	}
 
 	inline void signal(int n = 1) {
-		if (count_.fetch_add(n) < 0)
-			cv.notify_one();
+		{
+			std::lock_guard<std::mutex> lock(mt);
+			count_.fetch_add(n);
+		}
+		cv.notify_one();
 	}
 	inline void wait() {
-		if (count_.fetch_sub(1) > 0)
-			return; // got it!
 		std::unique_lock<std::mutex> lock(mt);
-		cv.wait(lock);
+		cv.wait(lock, [this]() { return count_ > 0; });
+		count_.fetch_sub(1);
+		lock.unlock();
 	}
 
 private:
-	std::atomic<int> count_ { 0 };		// synch object
+	std::atomic<int> count_{ 0 };		// synch object
 	std::condition_variable cv;			// condition variable
 	std::mutex mt;						// mutex for above
 };
@@ -407,7 +399,7 @@ public:
 			data = getRValue<T>(td.data);
 		// "consume" element
 		rmsRoot->FreePair(td);
-		lock_guard<RSpinLock> acquire(spin);
+		std::lock_guard<RSpinLock> acquire(spin);
 		if (++read == write)
 			read = 0, write = 0; // reset to "quick" entries when we can
 		return flags;
@@ -446,11 +438,11 @@ private:
 	// RMs queue read/write pointer -> queue indirect page index
 	inline int qp2pi(int p) const { return (p - NQuick) & 0x1ff; }
 
-	std::atomic<int> magic { QueueMagic };// our magic number ('RMsQ')
+	std::atomic<int> magic{ QueueMagic };// our magic number ('RMsQ')
 	RSpinLock spin;						// our spinlock
 	RSemaphore semaphore;				// our semaphore
 	rms_ptr_t pattern;					// our pattern
-	std::atomic<int> state { 0 };			// our "state"
+	std::atomic<int> state{ 0 };		// our "state"
 	volatile int read = 0, write = 0;	// [current] read, write ptrs
 	volatile int pages = 0;				// # of [4kb] indirect queue entry pages
 	volatile int prev = 0, next = 0;	// previous, next queues
@@ -664,7 +656,7 @@ public:
 	}
 
 private:
-	std::atomic<int> id { 0 };			// our subscription queue ID
+	std::atomic<int> id{ 0 };			// our subscription queue ID
 };
 
 }
