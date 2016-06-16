@@ -239,15 +239,14 @@ public:
 	inline void signal(int n = 1) {
 		{
 			std::lock_guard<std::mutex> lock(mt);
-			count_.fetch_add(n);
+			count_ += n;
 		}
 		cv.notify_one();
 	}
 	inline void wait() {
 		std::unique_lock<std::mutex> lock(mt);
 		cv.wait(lock, [this]() { return count_ > 0; });
-		count_.fetch_sub(1);
-		lock.unlock();
+		--count_;
 	}
 
 private:
