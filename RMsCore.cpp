@@ -30,6 +30,12 @@
 #if defined(WIN32) || defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN		// Exclude rarely-used stuff from Windows headers
 #include <windows.h>
+#else
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/file.h>
+#include <sys/types.h>
+#include <sys/mman.h>
 #endif
 
 #include <cstdio>
@@ -205,10 +211,24 @@ int rms_initialize(int np)
 		}
 	}
 #else
-// issue a *warning* for "missing virtual alloc support"
-#warning "Missing current platform support code for 'virtual alloc'..."
-// FAIL THE COMPILE for "missing virtual alloc support"
-//static_assert(false, "Missing current platform support code for 'virtual alloc'...");
+	auto fd = shm_open("/rhps_rms_shared", O_CREAT | O_TRUNC | O_RDWR, 0666);
+	if (fd == -1)
+		return 0; // we're OUTTA here!
+	auto stat = ftruncate(fd, np * 4096);
+	if (stat != 0)
+		return 0; // we're OUTTA here!
+	rmsB = (char*)mmap(0, np * 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	close(fd);
+	if (rmsB == MAP_FAILED)
+		return 0; // we're OUTTA here!
+	// use "placement" new!
+	new(rmsB) RMsRoot();
+	rmsRoot = (RMsRoot*)rmsB;
+	if (!rmsRoot->Initialize(np)) {
+		munmap(rmsB, np * 4096), rmsB = NULL;
+		shm_unlink("rhps_rms_shared");
+		return 0;	// we're OUTTA here!
+	}
 #endif
 	// verify [expected] invariants
 	static_assert(sizeof(RMsRoot) <= 4096, "RMsRoot instance MUST be <= 4096 bytes long!");
@@ -432,11 +452,6 @@ int RMsRoot::AllocPage()
 				dumpRoot("AllocPage()...COMMIT FAILED!\n");
 				return 0;	// we're OUTTA here!
 			}
-#else
-// issue a *warning* for "missing virtual alloc support"
-#warning "Missing current platform support code for 'virtual alloc'..."
-// FAIL THE COMPILE for "missing virtual alloc support"
-//static_assert(false, "Missing current platform support code for 'virtual alloc'...");
 #endif
 			committed += PageIncrement;
 		}
@@ -591,11 +606,6 @@ int RMsRoot::Initialize(int np)
 #if defined(WIN32) || defined(_WIN32)
 	if (!::VirtualAlloc(rmsB, PageIncrement*4096, MEM_COMMIT, PAGE_READWRITE))
 		return 0;	// indicate failure
-#else
-// issue a *warning* for "missing virtual alloc support"
-#warning "Missing current platform support code for 'virtual alloc'..."
-// FAIL THE COMPILE for "missing virtual alloc support"
-//static_assert(false, "Missing current platform support code for 'virtual alloc'...");
 #endif
 	pages = np, committed = PageIncrement;
 	high = 1;	// we ARE the 1st page...
