@@ -1,5 +1,7 @@
-RMs
-===
+# RMs
+
+[![Build status](https://ci.appveyor.com/api/projects/status/github/robertroessler/rms?svg=true)](https://ci.appveyor.com/project/robertroessler/rms)
+
 The RMs (rms) project implements a [reasonably] high-performance multi-threaded
 "pub/sub" messaging system, designed around a shared-memory approach to storing
 messages awaiting delivery.  This was chosen so that multi-process publication
@@ -53,8 +55,8 @@ expect a high-perf / non-blocking logging sink (::OutputDebugString in Windows)
 
 ... again, both of the above are [almost] trivially re-hosted in modern OSes.
 
-ToDo
-====
+## ToDo
+
 Possible items to work on - for myself or collaborators include
 
 * additonal (and properly laid out) test cases, both to serve as actual tests
@@ -67,8 +69,8 @@ and to show examples of usage - PARTICULARLY displaying multi-threaded use
 * as only Visual Studio 2015 project and solution files are initially present,
 control files for building in non-Windows environments could be useful
 
-ProbablyNot
-===========
+## ProbablyNot
+
 Things that most likely should NOT happen include
 
 * any attempt to return to or re-emphasize the ancient "version 0.5" lower-level
