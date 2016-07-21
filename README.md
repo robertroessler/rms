@@ -1,7 +1,5 @@
 # RMs
 
-[![Build status](https://ci.appveyor.com/api/projects/status/github/robertroessler/rms?svg=true)](https://ci.appveyor.com/project/robertroessler/rms)
-
 The RMs (rms) project implements a [reasonably] high-performance multi-threaded
 "pub/sub" messaging system, designed around a shared-memory approach to storing
 messages awaiting delivery.  This was chosen so that multi-process publication
