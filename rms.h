@@ -150,13 +150,23 @@ inline void* pg2xp(int pg)
 }
 
 //	RMs ptr -> RMs type
-inline int rp2ty(rms_ptr_t rp)
+constexpr int rp2ty(rms_ptr_t rp)
 {
 	return (rp >> 12) & 0x0f;
 }
 
+// length -> RMs type
+inline int n2ty(int n)
+{
+	int i = 1;
+	for (; i < 11; i++)
+		if (n <= (2 << i))
+			break;
+	return i;
+}
+
 //	RMs type -> (binary logarithm of type's [max] length) - 1
-inline int ty2logM1(int ty)
+constexpr int ty2logM1(int ty)
 {
 	// assert 0 <= ty <= 15
 	return
@@ -166,6 +176,18 @@ inline int ty2logM1(int ty)
 		"\x02"											// int64
 		"\x02"											// double
 		"\x0b"[ty];										// unk
+}
+
+// RMs ptr from page, RMs type, and page offset
+constexpr rms_ptr_t make_rp(int pg, int ty, int po)
+{
+	return (pg << 16) | (ty << 12) | po;
+}
+
+// RMs ptr -> RMs ptr' with encoded data length n
+constexpr rms_ptr_t rp2rp(rms_ptr_t rp, int n)
+{
+	return (rp & ~((2 << ty2logM1(rp2ty(rp))) - 1)) | ((n == (2 << ty2logM1(rp2ty(rp)))) ? 0 : n);
 }
 
 //	exposed [H/W] ptr -> RMs page
@@ -185,8 +207,7 @@ inline void* rp2xp(rms_ptr_t rp)
 //	Simple spinlock class
 class RSpinLock {
 public:
-	inline void lock()
-	{
+	inline void lock() {
 		// try simple lock...
 		while (lock_.test_and_set(std::memory_order_acquire))
 			// ... nope, release time slice and keep trying
@@ -294,28 +315,8 @@ private:
 		const int ty = rp2ty(rp);
 		*(int*)rp2xp(rp) = typeFree[ty], typeFree[ty] = rp;
 	}
+	// N.B. - Call with RMsRoot mutex LOCKED!
 	void initTypedPageAsFree(int pg, int ty);
-	// RMs ptr from page, RMs type, and page offset
-	inline rms_ptr_t make_rp(int pg, int ty, int po) const
-	{
-		return (pg << 16) | (ty << 12) | po;
-	}
-	// length -> RMs type
-	inline int n2ty(int n) const
-	{
-		int i = 1;
-		for (; i < 11; i++)
-			if (n <= (2 << i))
-				break;
-		return i;
-	}
-	// RMs ptr -> RMs ptr' with encoded data length n
-	inline rms_ptr_t rp2rp(rms_ptr_t rp, int n) const
-	{
-		const int i = ty2logM1(rp2ty(rp));
-		const int N = (n == (2 << i)) ? 0 : n;
-		return (rp & ~((2 << i) - 1)) | N;
-	}
 
 	int magic = RootMagic;				// root magic number ('RMsR')
 	RSpinLockEx spin;					// root [recursive] spinlock
