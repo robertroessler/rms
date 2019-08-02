@@ -1,5 +1,4 @@
-#define WIN32_LEAN_AND_MEAN		// Exclude rarely-used stuff from Windows headers
-#include <windows.h>
+#include <chrono>
 #include <stdio.h>
 #include "rms.h"
 
@@ -10,6 +9,9 @@ const int Transactions = 1;
 const int Iterations = 100000;
 const int Transactions = 10;
 #endif // DEBUG
+
+using namespace std::chrono;
+using namespace rms;
 
 int main(int argc, char* argv[])
 {
@@ -35,13 +37,13 @@ int main(int argc, char* argv[])
 	printf("rms_publish_int64 => %d\n", rms_publish_int64("ad", 84));
 	printf("rms_peek => %d\n", rms_peek(id));
 	int v;
-	__int64 w;
+	long long w;
 	char vb[4], vd[4], vt[4], vu[4];
 	int nb = sizeof vb, nd = sizeof vd, nt = sizeof vt, nu = sizeof vu;
 	// ... until AFTER the next 4 "rms_waits"...
-	if (rms_wait_string(id, NULL, NULL, vb, &nb, 1) == 1)
+	if (rms_wait_string(id, nullptr, nullptr, vb, &nb, 1) == 1)
 		printf("rms_wait_string => %s\n", vb);
-	if (rms_wait_string(id, NULL, NULL, vd, &nd, 1) == 1)
+	if (rms_wait_string(id, nullptr, nullptr, vd, &nd, 1) == 1)
 		printf("rms_wait_string => %s\n", vd);
 	if (rms_wait_int32(id, vt, &nt, &v, 3) == 3)
 		printf("rms_wait_int32 => '%s'(%d): %d\n", vt, nt, v);
@@ -50,24 +52,25 @@ int main(int argc, char* argv[])
 	// ... as in, NOW
 	printf("rms_peek => %d\n", rms_peek(id));
 	// INSIDE a loop... 
-	const DWORD t0 = ::GetTickCount();
-	for (int i = 0; i < Iterations; i++) {
+	const auto t0 = high_resolution_clock::now();
+	for (auto i = 0; i < Iterations; i++) {
 		// ... publish 10 messages...
-		for (int j = 0; j < Transactions; j++)
+		for (auto j = 0; j < Transactions; j++)
 			rms_publish_int64("tag", 42LL);
-		long long sum = 0;
+		auto sum = 0ll;
 		// ... and then consume them
-		for (int j = 0; j < Transactions; j++) {
+		for (auto j = 0; j < Transactions; j++) {
 			char t[8];
 			long long d;
 			int nT = sizeof t;
-			rms_wait_int64(id, t, &nT, &d, 3);
+			rms_wait_int64(id, nullptr, &nT, &d, 1);
 			// do something with the returned data
 			sum += d;
 		}
 	}
-	const DWORD t1 = ::GetTickCount();
+	const auto t1 = high_resolution_clock::now();
 	rms_close(id);
-	printf("time for %d Publish/Wait pairs = %d\n", Iterations * Transactions, t1 - t0);
+	printf("timing for %d Publish/Wait pairs = %g ns/round-trip\n", Iterations * Transactions,
+		(duration_cast<microseconds>(t1 - t0).count() / (double(Iterations) * Transactions / 1000)));
 	return 0;
 }

@@ -1,7 +1,7 @@
 /*
 	RMsCore.cpp - "core" functionality of the RMs messaging system
 
-	Copyright(c) 2004-2016, Robert Roessler
+	Copyright(c) 2004-2019, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -47,23 +47,23 @@ using namespace std;
 using namespace rms;
 
 //	get "clean" string representation of a std::thread::id
-static inline string threadId2string(thread::id id)
+static inline auto threadId2string(thread::id id)
 {
 	ostringstream s;
 	s << hex << id;
 	return s.str();
 }
 
-char* rms::rmsB = NULL;					// shared memory view pointer(s)
-RMsRoot* rms::rmsRoot = NULL;			// shared "root" object
-static int NQPage = 0;					// # of pages of RMsQueue "extras"
+char* rms::rmsB = nullptr;				// shared memory view pointer(s)
+RMsRoot* rms::rmsRoot = nullptr;		// shared "root" object
+static auto NQPage = 0;					// # of pages of RMsQueue "extras"
 
 //	Dump root object info
 template <typename ...Params>
 static void dumpRoot(Params&&... params) {
 #ifdef DUMP_ROOT
 	char bb[128];
-	const int n = snprintf(bb, sizeof bb, "RMsRoot[%s]::", threadId2string(std::this_thread::get_id()).c_str());
+	const auto n = snprintf(bb, sizeof bb, "RMsRoot[%s]::", threadId2string(std::this_thread::get_id()).c_str());
 	if (n > 0) {
 		snprintf(bb + n, sizeof bb - n, forward<Params>(params)...);
 		fputs(bb, stderr);
@@ -76,7 +76,7 @@ template <typename ...Params>
 static void dumpQueue(Params&&... params) {
 #ifdef DUMP_QUEUE
 	char bb[128];
-	const int n = snprintf(bb, sizeof bb, "RMsRoot[%s]::", threadId2string(std::this_thread::get_id()).c_str());
+	const auto n = snprintf(bb, sizeof bb, "RMsRoot[%s]::", threadId2string(std::this_thread::get_id()).c_str());
 	if (n > 0) {
 		snprintf(bb + n, sizeof bb - n, forward<Params>(params)...);
 		fputs(bb, stderr);
@@ -181,22 +181,22 @@ int rms_initialize(int np)
 {
 	dumpExported("rms_initialize(%d)...\n", np);
 #if defined(WIN32) || defined(_WIN32)
-	static HANDLE rmsM = NULL;				// shared memory mapping object(s)
-	rmsM = ::CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE|SEC_RESERVE,
-		0, np*4096, NULL);
-	if (rmsM == NULL)
+	static HANDLE rmsM = nullptr;				// shared memory mapping object(s)
+	rmsM = ::CreateFileMapping(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE|SEC_RESERVE,
+		0, np*4096, nullptr);
+	if (rmsM == nullptr)
 		return 0;	// we're OUTTA here!
 	const DWORD mapE = ::GetLastError();// (stash for later)
 	// [attempt to] map view
 	rmsB = (char*)::MapViewOfFile(rmsM, FILE_MAP_ALL_ACCESS, 0, 0, 0);
-	if (rmsB == NULL) {
-		::CloseHandle(rmsM), rmsM = NULL;
+	if (rmsB == nullptr) {
+		::CloseHandle(rmsM), rmsM = nullptr;
 		return 0;	// we're OUTTA here!
 	}
 	// [attempt to] commit FIRST page (bootstrapping)
-	if (::VirtualAlloc(rmsB, 1*4096, MEM_COMMIT, PAGE_READWRITE) == NULL) {
-		::UnmapViewOfFile(rmsB), rmsB = NULL;
-		::CloseHandle(rmsM), rmsM = NULL;
+	if (::VirtualAlloc(rmsB, 1*4096, MEM_COMMIT, PAGE_READWRITE) == nullptr) {
+		::UnmapViewOfFile(rmsB), rmsB = nullptr;
+		::CloseHandle(rmsM), rmsM = nullptr;
 		return 0;	// we're OUTTA here!
 	}
 	// init mapping AS REQUIRED
@@ -205,8 +205,8 @@ int rms_initialize(int np)
 		new(rmsB) RMsRoot();
 		rmsRoot = (RMsRoot*)rmsB;
 		if (!rmsRoot->Initialize(np)) {
-			::UnmapViewOfFile(rmsB), rmsB = NULL;
-			::CloseHandle(rmsM), rmsM = NULL;
+			::UnmapViewOfFile(rmsB), rmsB = nullptr;
+			::CloseHandle(rmsM), rmsM = nullptr;
 			return 0;	// we're OUTTA here!
 		}
 	}
@@ -225,7 +225,7 @@ int rms_initialize(int np)
 	new(rmsB) RMsRoot();
 	rmsRoot = (RMsRoot*)rmsB;
 	if (!rmsRoot->Initialize(np)) {
-		munmap(rmsB, np * 4096), rmsB = NULL;
+		munmap(rmsB, np * 4096), rmsB = nullptr;
 		shm_unlink("rhps_rms_shared");
 		return 0;	// we're OUTTA here!
 	}
@@ -259,10 +259,10 @@ int rms_peek(int id)
 }
 
 RMS_EXPORT
-int rms_publish_bytes(const char* tag, const unsigned char* data, int n)
+int rms_publish_bytes(std::string_view tag, const unsigned char* data, int n)
 {
 	dumpExported("rms_publish_bytes('%s',%02x...,%d)...\n", tag, data[0], n);
-	if (tag == NULL)
+	if (tag.empty())
 		return 0;	// we're OUTTA here!
 	// N.B. - limit n to 0 <= n <= 4096!
 	if (n < 0 || n > 4096)
@@ -272,47 +272,46 @@ int rms_publish_bytes(const char* tag, const unsigned char* data, int n)
 }
 
 RMS_EXPORT
-int rms_publish_ieee(const char* tag, rms_ieee data)
+int rms_publish_ieee(std::string_view tag, rms_ieee data)
 {
 	dumpExported("rms_publish_ieee('%s',%ld)...\n", tag, data);
-	if (tag == NULL)
+	if (tag.empty())
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_publish_ieee('%s'...)...Distribute()\n", tag);
 	return rmsRoot->Distribute(tag, &data, sizeof(rms_ieee), RMsTypeIeee);
 }
 
 RMS_EXPORT
-int rms_publish_int32(const char* tag, rms_int32 data)
+int rms_publish_int32(std::string_view tag, rms_int32 data)
 {
 	dumpExported("rms_publish_int32('%s',%d)...\n", tag, data);
-	if (tag == NULL)
+	if (tag.empty())
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_publish_int32('%s'...)...Distribute()\n", tag);
 	return rmsRoot->Distribute(tag, &data, sizeof(rms_int32), RMsTypeInt32);
 }
 
 RMS_EXPORT
-int rms_publish_int64(const char* tag, rms_int64 data)
+int rms_publish_int64(std::string_view tag, rms_int64 data)
 {
 	dumpExported("rms_publish_int64('%s',%ld)...\n", tag, data);
-	if (tag == NULL)
+	if (tag.empty())
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_publish_int64('%s'...)...Distribute()\n", tag);
 	return rmsRoot->Distribute(tag, &data, sizeof(rms_int64), RMsTypeInt64);
 }
 
 RMS_EXPORT
-int rms_publish_string(const char* tag, const char* data)
+int rms_publish_string(std::string_view tag, std::string_view data)
 {
 	dumpExported("rms_publish_string('%s','%.8s...')...()\n", tag, data);
-	if (tag == NULL)
+	if (tag.empty())
 		return 0;	// we're OUTTA here!
 	// N.B. - limit any data to 0 <= strlen(data) <= 4095!
-	const int n = data? ((int)strlen(data) + 1): 0;
-	if (n > 4096)
+	if (data.size() > 4096)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_publish_string('%s'...)...Distribute()\n", tag);
-	return rmsRoot->Distribute(tag, data, n);
+	return rmsRoot->Distribute(tag, data.data(), (int)data.size());
 }
 
 RMS_EXPORT
@@ -326,10 +325,10 @@ int rms_signal(int id, int flags)
 }
 
 RMS_EXPORT
-int rms_subscribe(const char* pattern)
+int rms_subscribe(std::string_view pattern)
 {
 	dumpExported("rms_subscribe('%s')...\n", pattern);
-	if (pattern == NULL)
+	if (pattern.empty())
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_subscribe('%s')...Create()\n", pattern);
 	return RMsQueue::Create(pattern);
@@ -341,9 +340,9 @@ int rms_wait_bytes(int id, char tag[], int* tagN, unsigned char data[], int* dat
 	dumpExported("rms_wait_bytes(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetTag) && tagN == NULL)
+	if ((flags & RMsGetTag) && tagN == nullptr)
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetData) && dataN == NULL)
+	if ((flags & RMsGetData) && dataN == nullptr)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_bytes(%d...%d)...Wait()\n", id, flags);
 	return ((RMsQueue*)pg2xp(id))->Wait(tag, tagN, data, dataN, flags);
@@ -355,9 +354,9 @@ int rms_wait_ieee(int id, char tag[], int* tagN, rms_ieee* data, int flags)
 	dumpExported("rms_wait_ieee(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetTag) && tagN == NULL)
+	if ((flags & RMsGetTag) && tagN == nullptr)
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetData) && data == NULL)
+	if ((flags & RMsGetData) && data == nullptr)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_ieee(%d...%d)...Wait()\n", id, flags);
 	int dataN = sizeof(rms_ieee);
@@ -370,9 +369,9 @@ int rms_wait_int32(int id, char tag[], int* tagN, rms_int32* data, int flags)
 	dumpExported("rms_wait_int32(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetTag) && tagN == NULL)
+	if ((flags & RMsGetTag) && tagN == nullptr)
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetData) && data == NULL)
+	if ((flags & RMsGetData) && data == nullptr)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_int32(%d...%d)...Wait()\n", id, flags);
 	int dataN = sizeof(rms_int32);
@@ -385,9 +384,9 @@ int rms_wait_int64(int id, char tag[], int* tagN, rms_int64* data, int flags)
 	dumpExported("rms_wait_int64(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetTag) && tagN == NULL)
+	if ((flags & RMsGetTag) && tagN == nullptr)
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetData) && data == NULL)
+	if ((flags & RMsGetData) && data == nullptr)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_int64(%d...%d)...Wait()\n", id, flags);
 	int dataN = sizeof(rms_int64);
@@ -400,12 +399,20 @@ int rms_wait_string(int id, char tag[], int* tagN, char data[], int* dataN, int 
 	dumpExported("rms_wait_string(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetTag) && tagN == NULL)
+	if ((flags & RMsGetTag) && tagN == nullptr)
 		return 0;	// we're OUTTA here!
-	if ((flags & RMsGetData) && dataN == NULL)
+	if ((flags & RMsGetData) && dataN == nullptr)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_string(%d...%d)...Wait()\n", id, flags);
-	return ((RMsQueue*)pg2xp(id))->Wait(tag, tagN, data, dataN, flags);
+	// special-case semantics for [assumed] "C" strings...
+	auto orig_dataN = *dataN;
+	auto f = ((RMsQueue*)pg2xp(id))->Wait(tag, tagN, data, dataN, flags);
+	// ... iff the string data was successfully retrieved...
+	if ((f & (RMsGetData | RMsOnlyLength)) == RMsGetData)
+		// ... and there is still room...
+		if (*dataN < orig_dataN)
+			data[*dataN] = '\0';	// ... NUL-terminate!
+	return f;
 }
 
 /*
@@ -447,8 +454,8 @@ int RMsRoot::AllocPage()
 			}
 			dumpRoot("AllocPage()...committing %d pages\n", PageIncrement);
 #if defined(WIN32) || defined(_WIN32)
-			if (::VirtualAlloc(rmsB + high*4096, PageIncrement*4096,
-				MEM_COMMIT, PAGE_READWRITE) == NULL) {
+			if (::VirtualAlloc(rmsB + high*size_t(4096), PageIncrement*4096,
+				MEM_COMMIT, PAGE_READWRITE) == nullptr) {
 				dumpRoot("AllocPage()...COMMIT FAILED!\n");
 				return 0;	// we're OUTTA here!
 			}
@@ -500,7 +507,7 @@ rms_ptr_t RMsRoot::AllocRP(int ty, int n)
 		ty = n2ty(n);
 	lock_guard<RSpinLockEx> acquire(spin);
 	if (!typeFree[ty]) {
-		const int pg = AllocPage();
+		const auto pg = AllocPage();
 		if (pg)
 			initTypedPageAsFree(pg, ty);
 	}
@@ -548,7 +555,7 @@ int RMsRoot::CheckQueue(int pg)
 /*
 	Add this tag/typed-data pair to any subscription queue that "matches" the tag.
 */
-int RMsRoot::Distribute(const char* tag, const void* data, int n, int ty)
+int RMsRoot::Distribute(std::string_view tag, const void* data, int n, int ty)
 {
 	lock_guard<RSpinLockEx> acquire(spin);
 	for (int q = queueHead; q; q = ((RMsQueue*)pg2xp(q))->next)
@@ -626,7 +633,7 @@ void RMsRoot::initTypedPageAsFree(int pg, int ty)
 	dumpRoot("initTypedPageAsFree(%d,%d)...\n", pg, ty);
 	char* p = (char*)pg2xp(pg);
 	// compute max length of typed item...
-	const int d = 2 << ty2logM1(ty);
+	const auto d = 2 << ty2logM1(ty);
 	// ... link page of these from back to front...
 	for (int o = 4096 - d, n = 0; o >= 0; n = o, o -= d)
 		*(int*)(p + o) = n? make_rp(pg, ty, n): 0;
@@ -642,8 +649,8 @@ void RMsRoot::RemoveQueue(int pg)
 {
 	dumpRoot("RemoveQueue(%d)...\n", pg);
 	lock_guard<RSpinLockEx> acquire(spin);
-	const int prev = ((RMsQueue*)pg2xp(pg))->prev;
-	const int next = ((RMsQueue*)pg2xp(pg))->next;
+	const auto prev = ((RMsQueue*)pg2xp(pg))->prev;
+	const auto next = ((RMsQueue*)pg2xp(pg))->next;
 	if (prev)
 		((RMsQueue*)pg2xp(prev))->next = next;
 	else
@@ -662,19 +669,19 @@ void RMsRoot::RemoveQueue(int pg)
 
 	N.B. - no need to acquire the mutex lock at THIS level of processing
 */
-int RMsQueue::Append(const char* tag, const void* data, int n, int ty)
+int RMsQueue::Append(std::string_view tag, const void* data, int n, int ty)
 {
 	dumpQueue("<%d>::Append('%s'...%d)...\n", xp2pg(this), tag, ty);
 	if (state)
 		return RMsStatusSignaled;	// early out; indicate "signaled"
-	const int tN = (int)strlen(tag) + 1;
+	const auto tN = tag.size();
 	// N.B. - limit tN to 2 <= tN <= 4096!
-	if (tN < 2 || tN > 4096)
+	if (tN < 1 || tN > 4096)
 		return 0;	// we're OUTTA here!
-	rms_ptr_t tRP = rmsRoot->AllocRP(RMsTypeAuto, tN);
+	rms_ptr_t tRP = rmsRoot->AllocRP(RMsTypeAuto, (int)tN);
 	if (!tRP)
 		return 0;	// we're OUTTA here!
-	memcpy(rp2xp(tRP), tag, tN);
+	memcpy(rp2xp(tRP), tag.data(), tN);
 	rms_ptr_t dRP = 0;
 	if (n) {
 		if (!(dRP = rmsRoot->AllocRP(ty, n))) {
@@ -696,13 +703,13 @@ int RMsQueue::append(rms_ptr_t tag, rms_ptr_t data)
 {
 	dumpQueue("<%d>::append(%x:%x)...\n", xp2pg(this), tag, data);
 	int pg, pi;
-	const td_pair_t td = {tag, data};
+	const td_pair_t td{ tag, data };
 	lock_guard<RSpinLock> acquire(spin);
 	if (state) {
 		rmsRoot->FreePair(td);
 		return RMsStatusSignaled;	// early out; indicate "signaled"
 	}
-	const int status = checkWrite(pg, pi);
+	const auto status = checkWrite(pg, pi);
 	if (status) {
 		if (write < NQuick)
 			quickE[write] = td;
@@ -727,11 +734,11 @@ int RMsQueue::append(rms_ptr_t tag, rms_ptr_t data)
 int RMsQueue::checkWrite(int& pg, int& pi)
 {
 	if (write >= NQuick) {
-		const int p = qp2pq(write);
+		const auto p = qp2pq(write);
 		if (p >= pages) {
 			if (pages >= NQPage)
 				return 0;	// we're OUTTA here!
-			const int pg = rmsRoot->AllocPage();
+			const auto pg = rmsRoot->AllocPage();
 			if (!pg)
 				return 0;	// we're OUTTA here!
 			pageE[pages++] = pg;
@@ -747,7 +754,7 @@ int RMsQueue::checkWrite(int& pg, int& pi)
 */
 int RMsQueue::Close()
 {
-	const int pg = xp2pg(this);
+	const auto pg = xp2pg(this);
 	dumpQueue("<%d>::Close()...state=%08x\n", pg, state);
 	state |= RMsStatusClosing;
 	if (magic.exchange(0)) {
@@ -769,10 +776,10 @@ int RMsQueue::Close()
 	Perform non-constructor setup of RMsQueue data structure (I) - this is a
 	static method, so we act like an RMsQueue "factory".
 */
-int RMsQueue::Create(const char* pattern)
+int RMsQueue::Create(std::string_view pattern)
 {
 	dumpQueue("<?>::Create('%s')...\n", pattern);
-	const int pg = rmsRoot->AllocPage();
+	const auto pg = rmsRoot->AllocPage();
 	if (pg) {
 		// use "placement" new!
 		RMsQueue* qp = (RMsQueue*)pg2xp(pg);
@@ -808,15 +815,15 @@ int RMsQueue::Flush()
 	Perform non-constructor setup of RMsQueue data structure (II) - the primary
 	concern is creating and initializing the "glob" used for our "subscription".
 */
-int RMsQueue::initialize(const char* pattern)
+int RMsQueue::initialize(std::string_view pattern)
 {
-	if (!pattern[0])
+	if (pattern.empty())
 		return 0;	// we're OUTTA here!
 	rglob::compiler c;
 	c.compile(pattern);
 	const auto fsm = c.machine();
-	const auto n = fsm.length() + 1;
-	const rms_ptr_t rp = rmsRoot->AllocRP(RMsTypeAuto, (int)n);
+	const auto n = fsm.size();
+	const auto rp = rmsRoot->AllocRP(RMsTypeAuto, (int)n);
 	if (!rp)
 		return 0;	// we're OUTTA here!
 	memcpy(rp2xp(rp), fsm.c_str(), n);
@@ -828,11 +835,11 @@ int RMsQueue::initialize(const char* pattern)
 	Compare a string "tag" that is being published with our subscription's
 	"glob", returning the match/fail status.
 */
-int RMsQueue::Match(const char* tag) const
+int RMsQueue::Match(std::string_view tag) const
 {
 	if (state)
 		return RMsStatusSignaled;	// early out; indicate "signaled"
-	rglob::matcher m((const char*)rp2xp(pattern));
+	rglob::matcher m(std::string_view((const char*)rp2xp(pattern), rp2n(pattern)));
 	if (m.match(tag))
 		return 1;	// indicate match
 	return 0;
@@ -892,25 +899,25 @@ int RMsQueue::Wait(char* tag, int* tagN, void* data, int* dataN, int flags)
 	dumpQueue("<%d>::Wait(...%d)...%x:%x\n", xp2pg(this), flags, td.tag, td.data);
 	int status = flags;
 	if (flags & RMsGetTag) {
-		const int n = rp2n(td.tag);
+		const auto n = rp2n(td.tag);
 		if (tag) {
-			if (n <= *tagN)
-				memcpy(tag, rp2xp(td.tag), n);
+			if (n <= *tagN - 1)
+				memcpy(tag, rp2xp(td.tag), n), tag[n] = '\0';	// ("C" string!)
 			else
 				status ^= RMsGetTag;	// indicate length issue with TAG
 		} else
-			status |= 4;	// indicate only length data returned
+			status |= RMsOnlyLength;	// indicate only length data returned
 		*tagN = n;	// indicate actual length
 	}
 	if (flags & RMsGetData) {
-		const int n = rp2n(td.data);
+		const auto n = rp2n(td.data);
 		if (data) {
 			if (n <= *dataN)
 				memcpy(data, rp2xp(td.data), n);
 			else
 				status ^= RMsGetData;	// indicate length issue with DATA
 		} else
-			status |= 4;	// indicate only length data returned
+			status |= RMsOnlyLength;	// indicate only length data returned
 		*dataN = n;	// indicate actual length
 	}
 	// "consume" element IFF all requested tag info/data bits returned

@@ -10,8 +10,8 @@ const int Iterations = 100000;
 const int Transactions = 10;
 #endif // DEBUG
 
-using namespace std;
-using namespace chrono;
+using std::cout, std::endl, std::boolalpha, std::string;
+using namespace std::chrono;
 using namespace rms;
 
 int main(int argc, char* argv[])
@@ -41,26 +41,26 @@ int main(int argc, char* argv[])
 	// ... until AFTER the next 4 "gets"...
 	cout << "rms::get() => " << sub.get<string>() << endl;
 	cout << "rms::get() => " << sub.get<string>() << endl;
-	auto t32 = sub.get_with_tag<int>();
-	cout << "rms::get_with_tag() => " << t32.first << ':' << t32.second << endl;
-	auto t64 = sub.get_with_tag<long long>();
-	cout << "rms::get_with_tag() => " << t64.first << ':' << t64.second << endl;
+	{ auto [data, tag] = sub.get_with_tag<int>();
+	cout << "rms::get_with_tag() => " << data << ':' << tag << endl; }
+	{ auto [data, tag] = sub.get_with_tag<long long>();
+	cout << "rms::get_with_tag() => " << data << ':' << tag << endl; }
 	// ... as in, NOW
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// INSIDE a loop... 
 	const auto t0 = high_resolution_clock::now();
-	for (int i = 0; i < Iterations; i++) {
+	for (auto i = 0; i < Iterations; i++) {
 		// ... publish 10 messages...
-		for (int j = 0; j < Transactions; j++)
+		for (auto j = 0; j < Transactions; j++)
 			publisher::put_with_tag(42LL, "tag");
 		long long sum = 0;
 		// ... and then consume them
-		for (int j = 0; j < Transactions; j++)
+		for (auto j = 0; j < Transactions; j++)
 			// do something with the returned data
-			sum += sub.get_with_tag<long long>().first;
+			sum += sub.get<long long>();
 	}
 	const auto t1 = high_resolution_clock::now();
-	cout << "time for " << Iterations * Transactions << " Publish/Wait pairs = "
-		<< duration_cast<milliseconds>(t1 - t0).count() << endl;
+	cout << "timing for " << Iterations * Transactions << " Publish/Wait pairs = "
+		<< (duration_cast<microseconds>(t1 - t0).count() / (double(Iterations) * Transactions / 1000)) << " ns/round-trip" << endl;
 	return 0;
 }

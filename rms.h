@@ -1,7 +1,7 @@
 /*
 	rms.h - interface of the RMs messaging system
 
-	Copyright(c) 2004-2016, Robert Roessler
+	Copyright(c) 2004-2019, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -32,6 +32,7 @@
 #include <mutex>
 #include <thread>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #ifdef RMSDLL_EXPORTS
@@ -69,19 +70,19 @@ int rms_is_valid_queue(int id);
 RMS_EXPORT
 int rms_peek(int id);
 RMS_EXPORT
-int rms_publish_bytes(const char* tag, const unsigned char* data, int n);
+int rms_publish_bytes(std::string_view tag, const unsigned char* data, int n);
 RMS_EXPORT
-int rms_publish_ieee(const char* tag, rms_ieee data);
+int rms_publish_ieee(std::string_view tag, rms_ieee data);
 RMS_EXPORT
-int rms_publish_int32(const char* tag, rms_int32 data);
+int rms_publish_int32(std::string_view tag, rms_int32 data);
 RMS_EXPORT
-int rms_publish_int64(const char* tag, rms_int64 data);
+int rms_publish_int64(std::string_view tag, rms_int64 data);
 RMS_EXPORT
-int rms_publish_string(const char* tag, const char* data);
+int rms_publish_string(std::string_view tag, std::string_view data);
 RMS_EXPORT
 int rms_signal(int id, int flags);
 RMS_EXPORT
-int rms_subscribe(const char* pattern);
+int rms_subscribe(std::string_view pattern);
 RMS_EXPORT
 int rms_wait_bytes(int id, char tag[], int* tagN, unsigned char data[], int* dataN, int flags);
 RMS_EXPORT
@@ -113,7 +114,8 @@ enum {
 
 enum {
 	RMsGetData = 1,						// request "data" during a get*<> operation
-	RMsGetTag = 2						// request "tag" during a get*<> operation
+	RMsGetTag = 2,						// request "tag" during a get*<> operation
+	RMsOnlyLength = 4					// tag and/or data requested but...
 };
 
 //	# of [4KB] pages to commit at each growth
@@ -127,8 +129,8 @@ const int QueueMagic = 0x51734d52;		// ('RMsQ')
 //#define CHECK_ALLOC_FULL
 //#define CHECK_QUEUE_FULL
 //#define DUMP_EXPORTED
-#define DUMP_QUEUE
-#define DUMP_ROOT
+//#define DUMP_QUEUE
+//#define DUMP_ROOT
 #else
 #define CHECK_NOTHING
 #endif /* defined(_DEBUG) || defined(DUMP_ALL) */
@@ -144,9 +146,9 @@ typedef struct {
 extern char* rmsB;						// shared memory view pointer(s)
 
 //	RMs page -> exposed [H/W] ptr
-inline void* pg2xp(int pg)
+constexpr void* pg2xp(int pg)
 {
-	return rmsB + (pg << 12);
+	return rmsB + (ptrdiff_t(pg) << 12);
 }
 
 //	RMs ptr -> RMs type
@@ -156,7 +158,7 @@ constexpr int rp2ty(rms_ptr_t rp)
 }
 
 // length -> RMs type
-inline int n2ty(int n)
+constexpr int n2ty(int n)
 {
 	int i = 1;
 	for (; i < 11; i++)
@@ -191,13 +193,13 @@ constexpr rms_ptr_t rp2rp(rms_ptr_t rp, int n)
 }
 
 //	exposed [H/W] ptr -> RMs page
-inline int xp2pg(void* xp)
+constexpr int xp2pg(void* xp)
 {
 	return (int)((char*)xp - rmsB) >> 12;
 }
 
 //	RMs ptr -> exposed [H/W] ptr
-inline void* rp2xp(rms_ptr_t rp)
+constexpr void* rp2xp(rms_ptr_t rp)
 {
 	const int pg = rp >> 16;
 	const int po = rp & (~((2 << ty2logM1(rp2ty(rp))) - 1) & 0x0fff);
@@ -299,7 +301,7 @@ public:
 #if defined(CHECK_QUEUE) || defined(CHECK_QUEUE_FULL)
 	int CheckQueue(int pg);
 #endif
-	int Distribute(const char* tag, const void* data, int n, int ty = 0);
+	int Distribute(std::string_view tag, const void* data, int n, int ty = 0);
 	void FreePage(int pg);
 	void FreePair(td_pair_t p);
 	void FreeRP(rms_ptr_t rp);
@@ -320,9 +322,9 @@ private:
 
 	int magic = RootMagic;				// root magic number ('RMsR')
 	RSpinLockEx spin;					// root [recursive] spinlock
-	volatile int pages;					// # of [4kb] pages RESERVED
-	volatile int committed;				// # of [4kb] pages COMMITTED
-	volatile int high;					// # used / next available
+	volatile int pages = 0;				// # of [4kb] pages RESERVED
+	volatile int committed = 0;			// # of [4kb] pages COMMITTED
+	volatile int high = 0;				// # used / next available
 	volatile int pageFree = 0;			// chain of free pages
 	volatile int queueHead = 0;			// doubly-linked list of queues
 	volatile int queueTail = 0;
@@ -332,7 +334,7 @@ private:
 extern RMsRoot* rmsRoot;				// shared "root" object
 
 //	RMs ptr -> actual data length
-inline int rp2n(rms_ptr_t rp)
+constexpr int rp2n(rms_ptr_t rp)
 {
 	const int i = ty2logM1(rp2ty(rp));
 	const int n = rp & ((2 << i) - 1);
@@ -370,10 +372,10 @@ class RMsQueue {
 public:
 	RMsQueue() {}
 
-	int Append(const char* tag, const void* data, int n, int ty = 0);
+	int Append(std::string_view tag, const void* data, int n, int ty = 0);
 	int Close();
 	int Flush();
-	int Match(const char* tag) const;
+	int Match(std::string_view tag) const;
 	int Peek() const { return write - read; }
 	int Signal(int flags);
 #if defined(CHECK_QUEUE) || defined(CHECK_QUEUE_FULL)
@@ -405,7 +407,7 @@ public:
 		return flags;
 	}
 
-	static int Create(const char* pattern);
+	static int Create(std::string_view pattern);
 
 private:
 	friend class RMsRoot;
@@ -432,16 +434,16 @@ private:
 
 	int append(rms_ptr_t tag, rms_ptr_t data);
 	int checkWrite(int& pg, int& pi);
-	int initialize(const char* pattern);
+	int initialize(std::string_view pattern);
 	// RMs queue read/write pointer -> queue indirect page #
-	inline int qp2pq(int p) const { return (p - NQuick) >> 9; }
+	constexpr int qp2pq(int p) const { return (p - NQuick) >> 9; }
 	// RMs queue read/write pointer -> queue indirect page index
-	inline int qp2pi(int p) const { return (p - NQuick) & 0x1ff; }
+	constexpr int qp2pi(int p) const { return (p - NQuick) & 0x1ff; }
 
 	std::atomic<int> magic{ QueueMagic };// our magic number ('RMsQ')
 	RSpinLock spin;						// our spinlock
 	RSemaphore semaphore;				// our semaphore
-	rms_ptr_t pattern;					// our pattern
+	rms_ptr_t pattern;					// our [compiled] pattern
 	std::atomic<int> state{ 0 };		// our "state"
 	volatile int read = 0, write = 0;	// [current] read, write ptrs
 	volatile int pages = 0;				// # of [4kb] indirect queue entry pages
@@ -457,33 +459,28 @@ private:
 int initialize(int np);
 
 /*
-	Contains function template versions of static "publish" methods for all
-	supported data and tag types - note that "data-less" tags may be published,
-	but publication of "tag-less" data is NOT allowed, as there would be no way
-	to match with subscriptions for delivery.
+	Contains static "publish" methods for all supported data and tag types -
+	note that "data-less" tags may be published, but publication of "tag-less"
+	data is NOT allowed, as there would be no way to match with subscriptions
+	for delivery.
+
+	N.B. - there is a fundamental asymmetry when publishing using [the new]
+	std::string_view as a data source... while it is a convenient and performant
+	data model to use for "output", in the general case the reverse is not true,
+	as there are serious issues raised with respect to "ownership" and lifetime
+	of the underlying character data being "viewed".
 */
 class publisher {
-	static inline const char* tagValue(const char* t) { return t; }
-	static inline const char* tagValue(const std::string& t) { return t.c_str(); }
-
 public:
 	// publish "tag/data pair" to any subscription queues with matching patterns
-	template<typename T>
-	static int put_with_tag(const char* d, T t) { return rms_publish_string(tagValue(t), d); }
-	template<typename T>
-	static int put_with_tag(const std::string& d, T t) { return rms_publish_bytes(tagValue(t), (const unsigned char*)d.data(), (int)d.length()); }
-	template<typename T>
-	static int put_with_tag(const unsigned char* d, int n, T t) { return rms_publish_bytes(tagValue(t), d, n); }
-	template<typename T>
-	static int put_with_tag(rms_ieee d, T t) { return rms_publish_ieee(tagValue(t), d); }
-	template<typename T>
-	static int put_with_tag(rms_int32 d, T t) { return rms_publish_int32(tagValue(t), d); }
-	template<typename T>
-	static int put_with_tag(rms_int64 d, T t) { return rms_publish_int64(tagValue(t), d); }
+	static int put_with_tag(std::string_view d, std::string_view t) { return rms_publish_bytes(t, (const unsigned char*)d.data(), (int)d.size()); }
+	static int put_with_tag(const unsigned char* d, int n, std::string_view t) { return rms_publish_bytes(t, d, n); }
+	static int put_with_tag(rms_ieee d, std::string_view t) { return rms_publish_ieee(t, d); }
+	static int put_with_tag(rms_int32 d, std::string_view t) { return rms_publish_int32(t, d); }
+	static int put_with_tag(rms_int64 d, std::string_view t) { return rms_publish_int64(t, d); }
 
 	// publish tag ONLY to any subscription queues with matching patterns
-	template<typename T>
-	static int put_tag(T t) { return rms_publish_bytes(tagValue(t), NULL, 0); }
+	static int put_tag(std::string_view t) { return rms_publish_bytes(t, nullptr, 0); }
 };
 
 // alias template for RMs data/tag pairs (tag is ALWAYS a std::string)
@@ -558,8 +555,7 @@ class subscription {
 public:
 	subscription() {}
 	// create a subscription queue that will receive messages matching pattern
-	subscription(const std::string& pattern) { subscribe(pattern); }
-	subscription(const char* pattern) { subscribe(pattern); }
+	subscription(std::string_view pattern) { subscribe(pattern); }
 	~subscription() { close(); }
 
 	// force shutdown of queue - usually better to leave to destructor
@@ -585,10 +581,9 @@ public:
 	int signal(int flags) { return id ? ((RMsQueue*)pg2xp(id))->Signal(flags) : 0; }
 
 	// sign up to receive any published messages with tag matched by pattern
-	void subscribe(const std::string& pattern) { close(), id = RMsQueue::Create(pattern.c_str()); }
-	void subscribe(const char* pattern) { close(), id = RMsQueue::Create(pattern); }
+	void subscribe(std::string_view pattern) { close(), id = RMsQueue::Create(pattern); }
 
-	// get next typed DATA item in queue
+	// get next typed DATA item in queue (blocking)
 	template<typename T>
 	T get() {
 		std::string tag;
@@ -597,7 +592,7 @@ public:
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetData);
 		return data;
 	}
-	// get next TAG item in queue
+	// get next TAG item in queue (blocking)
 	std::string get_tag() {
 		std::string tag;
 		int data;
@@ -605,14 +600,14 @@ public:
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetTag);
 		return tag;
 	}
-	// get next typed DATA item / TAG pair from queue
+	// get next typed DATA item / TAG pair from queue (blocking)
 	template<typename T>
 	rms_pair<T> get_with_tag() {
 		std::string tag;
 		T data;
 		if (id)
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetTag | RMsGetData);
-		return std::make_pair(data, tag);
+		return { data, tag };
 	}
 
 	// get next typed DATA item in queue (extraction operator >>)
@@ -633,21 +628,21 @@ public:
 	template<typename T>
 	bool try_get_with_tag(rms_pair<T>& p) { return !eod_or_empty() ? p = get_with_tag<T>(), true : false; }
 
-	// get ALL typed DATA items in queue (blocking)
+	// iterate and apply f to ALL typed DATA items in queue (blocking)
 	template<typename T, class UnaryFunction>
 	void for_each(UnaryFunction f) {
 		T data;
 		while (data = get<T>(), !eod())
 			f(data);
 	}
-	// get ALL TAG items in queue (blocking)
+	// iterate and apply f to ALL TAG items in queue (blocking)
 	template<class UnaryFunction>
 	void for_each_tag(UnaryFunction f) {
 		std::string tag;
 		while (tag = get_tag(), !eod())
 			f(tag);
 	}
-	// get ALL typed DATA item / TAG pairs in queue (blocking)
+	// iterate and apply f to ALL typed DATA item / TAG pairs in queue (blocking)
 	template<typename T, class UnaryFunction>
 	void for_each_with_tag(UnaryFunction f) {
 		rms_pair<T> pair;
