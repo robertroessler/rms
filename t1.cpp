@@ -39,16 +39,16 @@ int main(int argc, char* argv[])
 	int v;
 	long long w;
 	char vb[4], vd[4], vt[4], vu[4];
-	int nb = sizeof vb, nd = sizeof vd, nt = sizeof vt, nu = sizeof vu;
+	size_t nb = sizeof vb, nd = sizeof vd, nt = sizeof vt, nu = sizeof vu;
 	// ... until AFTER the next 4 "rms_waits"...
 	if (rms_wait_string(id, nullptr, nullptr, vb, &nb, 1) == 1)
 		printf("rms_wait_string => %s\n", vb);
 	if (rms_wait_string(id, nullptr, nullptr, vd, &nd, 1) == 1)
 		printf("rms_wait_string => %s\n", vd);
 	if (rms_wait_int32(id, vt, &nt, &v, 3) == 3)
-		printf("rms_wait_int32 => '%s'(%d): %d\n", vt, nt, v);
+		printf("rms_wait_int32 => '%s'(%zd): %d\n", vt, nt, v);
 	if (rms_wait_int64(id, vu, &nu, &w, 3) == 3)
-		printf("rms_wait_int64 => '%s'(%d): %lld\n", vu, nu, w);
+		printf("rms_wait_int64 => '%s'(%zd): %lld\n", vu, nu, w);
 	// ... as in, NOW
 	printf("rms_peek => %d\n", rms_peek(id));
 	// INSIDE a loop... 
@@ -62,7 +62,7 @@ int main(int argc, char* argv[])
 		for (auto j = 0; j < Transactions; j++) {
 			char t[8];
 			long long d;
-			int nT = sizeof t;
+			auto nT = sizeof t;
 			rms_wait_int64(id, nullptr, &nT, &d, 1);
 			// do something with the returned data
 			sum += d;

@@ -70,7 +70,7 @@ int rms_is_valid_queue(int id);
 RMS_EXPORT
 int rms_peek(int id);
 RMS_EXPORT
-int rms_publish_bytes(std::string_view tag, const unsigned char* data, int n);
+int rms_publish_bytes(std::string_view tag, const unsigned char* data, size_t n);
 RMS_EXPORT
 int rms_publish_ieee(std::string_view tag, rms_ieee data);
 RMS_EXPORT
@@ -84,15 +84,15 @@ int rms_signal(int id, int flags);
 RMS_EXPORT
 int rms_subscribe(std::string_view pattern);
 RMS_EXPORT
-int rms_wait_bytes(int id, char tag[], int* tagN, unsigned char data[], int* dataN, int flags);
+int rms_wait_bytes(int id, char tag[], size_t* tagN, unsigned char data[], size_t* dataN, int flags);
 RMS_EXPORT
-int rms_wait_ieee(int id, char tag[], int* tagN, rms_ieee* data, int flags);
+int rms_wait_ieee(int id, char tag[], size_t* tagN, rms_ieee* data, int flags);
 RMS_EXPORT
-int rms_wait_int32(int id, char tag[], int* tagN, rms_int32* data, int flags);
+int rms_wait_int32(int id, char tag[], size_t* tagN, rms_int32* data, int flags);
 RMS_EXPORT
-int rms_wait_int64(int id, char tag[], int* tagN, rms_int64* data, int flags);
+int rms_wait_int64(int id, char tag[], size_t* tagN, rms_int64* data, int flags);
 RMS_EXPORT
-int rms_wait_string(int id, char tag[], int* tagN, char data[], int* dataN, int flags);
+int rms_wait_string(int id, char tag[], size_t* tagN, char data[], size_t* dataN, int flags);
 
 namespace rms {
 
@@ -158,11 +158,11 @@ constexpr int rp2ty(rms_ptr_t rp)
 }
 
 // length -> RMs type
-constexpr int n2ty(int n)
+constexpr int n2ty(int nn)
 {
 	int i = 1;
 	for (; i < 11; i++)
-		if (n <= (2 << i))
+		if (nn <= (2 << i))
 			break;
 	return i;
 }
@@ -187,9 +187,9 @@ constexpr rms_ptr_t make_rp(int pg, int ty, int po)
 }
 
 // RMs ptr -> RMs ptr' with encoded data length n
-constexpr rms_ptr_t rp2rp(rms_ptr_t rp, int n)
+constexpr rms_ptr_t rp2rp(rms_ptr_t rp, int nn)
 {
-	return (rp & ~((2 << ty2logM1(rp2ty(rp))) - 1)) | ((n == (2 << ty2logM1(rp2ty(rp)))) ? 0 : n);
+	return (rp & ~((2 << ty2logM1(rp2ty(rp))) - 1)) | ((nn == (2 << ty2logM1(rp2ty(rp)))) ? 0 : nn);
 }
 
 //	exposed [H/W] ptr -> RMs page
@@ -294,14 +294,14 @@ public:
 
 	int AddQueue(int pg);
 	int AllocPage();
-	rms_ptr_t AllocRP(int ty, int n);
+	rms_ptr_t AllocRP(int ty, size_t n);
 #if defined(CHECK_ALLOC) || defined(CHECK_ALLOC_FULL)
 	int CheckAlloc(int pg);
 #endif
 #if defined(CHECK_QUEUE) || defined(CHECK_QUEUE_FULL)
 	int CheckQueue(int pg);
 #endif
-	int Distribute(std::string_view tag, const void* data, int n, int ty = 0);
+	int Distribute(std::string_view tag, const void* data, size_t n, int ty = 0);
 	void FreePage(int pg);
 	void FreePair(td_pair_t p);
 	void FreeRP(rms_ptr_t rp);
@@ -328,13 +328,13 @@ private:
 	volatile int pageFree = 0;			// chain of free pages
 	volatile int queueHead = 0;			// doubly-linked list of queues
 	volatile int queueTail = 0;
-	rms_ptr_t typeFree[16] = {};		// "typed" (sized) free chains
+	rms_ptr_t typeFree[16]{};			// "typed" (sized) free chains
 };
 
 extern RMsRoot* rmsRoot;				// shared "root" object
 
 //	RMs ptr -> actual data length
-constexpr int rp2n(rms_ptr_t rp)
+constexpr size_t rp2n(rms_ptr_t rp)
 {
 	const int i = ty2logM1(rp2ty(rp));
 	const int n = rp & ((2 << i) - 1);
@@ -372,7 +372,7 @@ class RMsQueue {
 public:
 	RMsQueue() {}
 
-	int Append(std::string_view tag, const void* data, int n, int ty = 0);
+	int Append(std::string_view tag, const void* data, size_t n, int ty = 0);
 	int Close();
 	int Flush();
 	int Match(std::string_view tag) const;
@@ -382,7 +382,7 @@ public:
 	int Validate();
 #endif
 	int State() const { return state; }
-	int Wait(char* tag, int* tagN, void* data, int* dataN, int flags);
+	int Wait(char* tag, size_t* tagN, void* data, size_t* dataN, int flags);
 
 	template<typename T>
 	int Wait2(std::string& tag, T& data, int flags)
@@ -448,8 +448,8 @@ private:
 	volatile int read = 0, write = 0;	// [current] read, write ptrs
 	volatile int pages = 0;				// # of [4kb] indirect queue entry pages
 	volatile int prev = 0, next = 0;	// previous, next queues
-	td_pair_t quickE[NQuick] = {};		// "quick" queue entries
-	unsigned short pageE[4] = {};		// [pages of] queue entries (computed #)
+	td_pair_t quickE[NQuick]{};			// "quick" queue entries
+	unsigned short pageE[4]{};			// [pages of] queue entries (computed #)
 };
 
 /*
@@ -587,7 +587,7 @@ public:
 	template<typename T>
 	T get() {
 		std::string tag;
-		T data;
+		T data{};
 		if (id)
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetData);
 		return data;
@@ -604,7 +604,7 @@ public:
 	template<typename T>
 	rms_pair<T> get_with_tag() {
 		std::string tag;
-		T data;
+		T data{};
 		if (id)
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetTag | RMsGetData);
 		return { data, tag };
@@ -628,10 +628,20 @@ public:
 	template<typename T>
 	bool try_get_with_tag(rms_pair<T>& p) { return !eod_or_empty() ? p = get_with_tag<T>(), true : false; }
 
+	// get and apply f to FIRST typed DATA item in queue (blocking)
+	template<typename T, class UnaryFunction>
+	void for_first(UnaryFunction f) { if (T data = get<T>(); !eod()) f(data); }
+	// get and apply f to FIRST TAG item in queue (blocking)
+	template<class UnaryFunction>
+	void for_first_tag(UnaryFunction f) { if (std::string tag = get_tag(); !eod()) f(tag); }
+	// get and apply f to FIRST typed DATA item / TAG pair in queue (blocking)
+	template<typename T, class UnaryFunction>
+	void for_first_with_tag(UnaryFunction f) { if (rms_pair<T> pair = get_with_tag<T>(); !eod()) f(pair); }
+
 	// iterate and apply f to ALL typed DATA items in queue (blocking)
 	template<typename T, class UnaryFunction>
 	void for_each(UnaryFunction f) {
-		T data;
+		T data{};
 		while (data = get<T>(), !eod())
 			f(data);
 	}

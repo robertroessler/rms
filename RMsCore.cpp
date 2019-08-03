@@ -259,7 +259,7 @@ int rms_peek(int id)
 }
 
 RMS_EXPORT
-int rms_publish_bytes(std::string_view tag, const unsigned char* data, int n)
+int rms_publish_bytes(std::string_view tag, const unsigned char* data, size_t n)
 {
 	dumpExported("rms_publish_bytes('%s',%02x...,%d)...\n", tag, data[0], n);
 	if (tag.empty())
@@ -335,7 +335,7 @@ int rms_subscribe(std::string_view pattern)
 }
 
 RMS_EXPORT
-int rms_wait_bytes(int id, char tag[], int* tagN, unsigned char data[], int* dataN, int flags)
+int rms_wait_bytes(int id, char tag[], size_t* tagN, unsigned char data[], size_t* dataN, int flags)
 {
 	dumpExported("rms_wait_bytes(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
@@ -349,7 +349,7 @@ int rms_wait_bytes(int id, char tag[], int* tagN, unsigned char data[], int* dat
 }
 
 RMS_EXPORT
-int rms_wait_ieee(int id, char tag[], int* tagN, rms_ieee* data, int flags)
+int rms_wait_ieee(int id, char tag[], size_t* tagN, rms_ieee* data, int flags)
 {
 	dumpExported("rms_wait_ieee(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
@@ -359,12 +359,12 @@ int rms_wait_ieee(int id, char tag[], int* tagN, rms_ieee* data, int flags)
 	if ((flags & RMsGetData) && data == nullptr)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_ieee(%d...%d)...Wait()\n", id, flags);
-	int dataN = sizeof(rms_ieee);
+	auto dataN = sizeof(rms_ieee);
 	return ((RMsQueue*)pg2xp(id))->Wait(tag, tagN, data, &dataN, flags);
 }
 
 RMS_EXPORT
-int rms_wait_int32(int id, char tag[], int* tagN, rms_int32* data, int flags)
+int rms_wait_int32(int id, char tag[], size_t* tagN, rms_int32* data, int flags)
 {
 	dumpExported("rms_wait_int32(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
@@ -374,12 +374,12 @@ int rms_wait_int32(int id, char tag[], int* tagN, rms_int32* data, int flags)
 	if ((flags & RMsGetData) && data == nullptr)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_int32(%d...%d)...Wait()\n", id, flags);
-	int dataN = sizeof(rms_int32);
+	auto dataN = sizeof(rms_int32);
 	return ((RMsQueue*)pg2xp(id))->Wait(tag, tagN, data, &dataN, flags);
 }
 
 RMS_EXPORT
-int rms_wait_int64(int id, char tag[], int* tagN, rms_int64* data, int flags)
+int rms_wait_int64(int id, char tag[], size_t* tagN, rms_int64* data, int flags)
 {
 	dumpExported("rms_wait_int64(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
@@ -389,12 +389,12 @@ int rms_wait_int64(int id, char tag[], int* tagN, rms_int64* data, int flags)
 	if ((flags & RMsGetData) && data == nullptr)
 		return 0;	// we're OUTTA here!
 	dumpExported("rms_wait_int64(%d...%d)...Wait()\n", id, flags);
-	int dataN = sizeof(rms_int64);
+	auto dataN = sizeof(rms_int64);
 	return ((RMsQueue*)pg2xp(id))->Wait(tag, tagN, data, &dataN, flags);
 }
 
 RMS_EXPORT
-int rms_wait_string(int id, char tag[], int* tagN, char data[], int* dataN, int flags)
+int rms_wait_string(int id, char tag[], size_t* tagN, char data[], size_t* dataN, int flags)
 {
 	dumpExported("rms_wait_string(%d...%d)...\n", id, flags);
 	if (!isValidQueue(id))
@@ -499,12 +499,12 @@ int RMsRoot::AllocPage()
 	   :
 	   RMs type 11 = 1-4 KiB
 */
-rms_ptr_t RMsRoot::AllocRP(int ty, int n)
+rms_ptr_t RMsRoot::AllocRP(int ty, size_t n)
 {
 	dumpRoot("AllocRP(%d, %d)...\n", ty, n);
 	rms_ptr_t rp = 0;
 	if (ty == RMsTypeAuto)
-		ty = n2ty(n);
+		ty = n2ty(int(n));
 	lock_guard<RSpinLockEx> acquire(spin);
 	if (!typeFree[ty]) {
 		const auto pg = AllocPage();
@@ -512,7 +512,7 @@ rms_ptr_t RMsRoot::AllocRP(int ty, int n)
 			initTypedPageAsFree(pg, ty);
 	}
 	if (typeFree[ty])
-		rp = rp2rp(typeFree[ty], n), typeFree[ty] = *(rms_ptr_t*)rp2xp(rp);
+		rp = rp2rp(typeFree[ty], int(n)), typeFree[ty] = *(rms_ptr_t*)rp2xp(rp);
 	dumpRoot("AllocRP(%d, %d)...%08x\n", ty, n, rp);
 	return rp;
 }
@@ -539,9 +539,9 @@ int RMsRoot::CheckAlloc(int pg)
 #ifdef CHECK_QUEUE_FULL
 int RMsRoot::CheckQueue(int pg)
 {
-	int n = 0;
+	auto n = 0;
 	lock_guard<RSpinLockEx> acquire(spin);
-	for (int q = queueHead; q; q = ((RMsQueue*)pg2xp(q))->next)
+	for (auto q = queueHead; q; q = ((RMsQueue*)pg2xp(q))->next)
 		if (q == pg)
 			n++;
 	if (!n)
@@ -555,7 +555,7 @@ int RMsRoot::CheckQueue(int pg)
 /*
 	Add this tag/typed-data pair to any subscription queue that "matches" the tag.
 */
-int RMsRoot::Distribute(std::string_view tag, const void* data, int n, int ty)
+int RMsRoot::Distribute(std::string_view tag, const void* data, size_t n, int ty)
 {
 	lock_guard<RSpinLockEx> acquire(spin);
 	for (int q = queueHead; q; q = ((RMsQueue*)pg2xp(q))->next)
@@ -635,8 +635,8 @@ void RMsRoot::initTypedPageAsFree(int pg, int ty)
 	// compute max length of typed item...
 	const auto d = 2 << ty2logM1(ty);
 	// ... link page of these from back to front...
-	for (int o = 4096 - d, n = 0; o >= 0; n = o, o -= d)
-		*(int*)(p + o) = n? make_rp(pg, ty, n): 0;
+	for (auto o = 4096 - d, n = 0; o >= 0; n = o, o -= d)
+		*(int32_t*)(p + o) = n ? make_rp(pg, ty, n) : 0;
 	// finally, store as "head" of type's free list
 	typeFree[ty] = make_rp(pg, ty, 0);
 	dumpRoot("initTypedPageAsFree(%d,%d)...%08x\n", pg, ty, typeFree[ty]);
@@ -669,7 +669,7 @@ void RMsRoot::RemoveQueue(int pg)
 
 	N.B. - no need to acquire the mutex lock at THIS level of processing
 */
-int RMsQueue::Append(std::string_view tag, const void* data, int n, int ty)
+int RMsQueue::Append(std::string_view tag, const void* data, size_t n, int ty)
 {
 	dumpQueue("<%d>::Append('%s'...%d)...\n", xp2pg(this), tag, ty);
 	if (state)
@@ -702,13 +702,13 @@ int RMsQueue::Append(std::string_view tag, const void* data, int n, int ty)
 int RMsQueue::append(rms_ptr_t tag, rms_ptr_t data)
 {
 	dumpQueue("<%d>::append(%x:%x)...\n", xp2pg(this), tag, data);
-	int pg, pi;
 	const td_pair_t td{ tag, data };
 	lock_guard<RSpinLock> acquire(spin);
 	if (state) {
 		rmsRoot->FreePair(td);
 		return RMsStatusSignaled;	// early out; indicate "signaled"
 	}
+	int pg, pi;
 	const auto status = checkWrite(pg, pi);
 	if (status) {
 		if (write < NQuick)
@@ -880,7 +880,7 @@ int RMsQueue::Validate()
 	retained for some time to be used possibly for diagnostics/testing/validation
 	purposes.
 */
-int RMsQueue::Wait(char* tag, int* tagN, void* data, int* dataN, int flags)
+int RMsQueue::Wait(char* tag, size_t* tagN, void* data, size_t* dataN, int flags)
 {
 	dumpQueue("<%d>::Wait(...%d)...\n", xp2pg(this), flags);
 	if (state)
@@ -900,7 +900,7 @@ int RMsQueue::Wait(char* tag, int* tagN, void* data, int* dataN, int flags)
 	int status = flags;
 	if (flags & RMsGetTag) {
 		const auto n = rp2n(td.tag);
-		if (tag) {
+		if (tag != nullptr) {
 			if (n <= *tagN - 1)
 				memcpy(tag, rp2xp(td.tag), n), tag[n] = '\0';	// ("C" string!)
 			else
@@ -911,7 +911,7 @@ int RMsQueue::Wait(char* tag, int* tagN, void* data, int* dataN, int flags)
 	}
 	if (flags & RMsGetData) {
 		const auto n = rp2n(td.data);
-		if (data) {
+		if (data != nullptr) {
 			if (n <= *dataN)
 				memcpy(data, rp2xp(td.data), n);
 			else
