@@ -16,25 +16,25 @@ using namespace rms;
 int main(int argc, char* argv[])
 {
 	// start up RMs with 4 MB
-	printf("rms_initialize => %d\n", rms_initialize(1024));
+	rms_initialize(1024), printf("rms_initialize completed\n");
 	// accept any tag that STARTS with a OR t, followed by ZERO or MORE anything
 	const int id = rms_subscribe("[at]*");
 	printf("rms_subscribe => %d\n", id);
 	// sub should be EMPTY
 	printf("rms_peek => %d\n", rms_peek(id));
 	// publish message sub is NOT subscribed to...
-	printf("rms_publish_string => %d\n", rms_publish_string("z", "y"));
+	rms_publish_string("z", "y"), printf("rms_publish_string completed\n");
 	// ... so sub should be STILL be empty
 	printf("rms_peek => %d\n", rms_peek(id));
 	// publish 4 messages with 2 strings, 1 int, and 1 long long payload
-	printf("rms_publish_string => %d\n", rms_publish_string("a", "b"));
+	rms_publish_string("a", "b"), printf("rms_publish_string completed\n");
 	// sub should NOT be empty...
 	printf("rms_peek => %d\n", rms_peek(id));
-	printf("rms_publish_string => %d\n", rms_publish_string("ab", "d"));
+	rms_publish_string("ab", "d"), printf("rms_publish_string completed\n");
 	printf("rms_peek => %d\n", rms_peek(id));
-	printf("rms_publish_int32 => %d\n", rms_publish_int32("ac", 42));
+	rms_publish_int32("ac", 42), printf("rms_publish_int32 completed\n");
 	printf("rms_peek => %d\n", rms_peek(id));
-	printf("rms_publish_int64 => %d\n", rms_publish_int64("ad", 84));
+	rms_publish_int64("ad", 84), printf("rms_publish_int64 completed\n");
 	printf("rms_peek => %d\n", rms_peek(id));
 	int v;
 	long long w;

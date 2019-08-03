@@ -58,41 +58,41 @@ typedef long long rms_int64;
 */
 
 RMS_EXPORT
-int rms_close(int id);
+void rms_close(int id) noexcept(false);
 RMS_EXPORT
-int rms_flush(int id);
+void rms_flush(int id) noexcept(false);
 RMS_EXPORT
-int rms_initialize(int np);
+void rms_initialize(int np) noexcept(false);
 #ifdef _DEBUG
 RMS_EXPORT
 int rms_is_valid_queue(int id);
 #endif
 RMS_EXPORT
-int rms_peek(int id);
+int rms_peek(int id) noexcept(false);
 RMS_EXPORT
-int rms_publish_bytes(std::string_view tag, const unsigned char* data, size_t n);
+void rms_publish_bytes(std::string_view tag, const unsigned char* data, size_t n) noexcept(false);
 RMS_EXPORT
-int rms_publish_ieee(std::string_view tag, rms_ieee data);
+void rms_publish_ieee(std::string_view tag, rms_ieee data);
 RMS_EXPORT
-int rms_publish_int32(std::string_view tag, rms_int32 data);
+void rms_publish_int32(std::string_view tag, rms_int32 data);
 RMS_EXPORT
-int rms_publish_int64(std::string_view tag, rms_int64 data);
+void rms_publish_int64(std::string_view tag, rms_int64 data);
 RMS_EXPORT
-int rms_publish_string(std::string_view tag, std::string_view data);
+void rms_publish_string(std::string_view tag, std::string_view data) noexcept(false);
 RMS_EXPORT
-int rms_signal(int id, int flags);
+void rms_signal(int id, int flags) noexcept(false);
 RMS_EXPORT
-int rms_subscribe(std::string_view pattern);
+int rms_subscribe(std::string_view pattern) noexcept(false);
 RMS_EXPORT
-int rms_wait_bytes(int id, char tag[], size_t* tagN, unsigned char data[], size_t* dataN, int flags);
+int rms_wait_bytes(int id, char tag[], size_t* tagN, unsigned char data[], size_t* dataN, int flags) noexcept(false);
 RMS_EXPORT
-int rms_wait_ieee(int id, char tag[], size_t* tagN, rms_ieee* data, int flags);
+int rms_wait_ieee(int id, char tag[], size_t* tagN, rms_ieee* data, int flags) noexcept(false);
 RMS_EXPORT
-int rms_wait_int32(int id, char tag[], size_t* tagN, rms_int32* data, int flags);
+int rms_wait_int32(int id, char tag[], size_t* tagN, rms_int32* data, int flags) noexcept(false);
 RMS_EXPORT
-int rms_wait_int64(int id, char tag[], size_t* tagN, rms_int64* data, int flags);
+int rms_wait_int64(int id, char tag[], size_t* tagN, rms_int64* data, int flags) noexcept(false);
 RMS_EXPORT
-int rms_wait_string(int id, char tag[], size_t* tagN, char data[], size_t* dataN, int flags);
+int rms_wait_string(int id, char tag[], size_t* tagN, char data[], size_t* dataN, int flags) noexcept(false);
 
 namespace rms {
 
@@ -301,11 +301,11 @@ public:
 #if defined(CHECK_QUEUE) || defined(CHECK_QUEUE_FULL)
 	int CheckQueue(int pg);
 #endif
-	int Distribute(std::string_view tag, const void* data, size_t n, int ty = 0);
+	void Distribute(std::string_view tag, const void* data, size_t n, int ty = 0);
 	void FreePage(int pg);
 	void FreePair(td_pair_t p);
 	void FreeRP(rms_ptr_t rp);
-	int Initialize(int np);
+	bool Initialize(int np);
 	void RemoveQueue(int pg);
 
 private:
@@ -373,11 +373,11 @@ public:
 	RMsQueue() {}
 
 	int Append(std::string_view tag, const void* data, size_t n, int ty = 0);
-	int Close();
-	int Flush();
+	void Close();
+	void Flush();
 	int Match(std::string_view tag) const;
 	int Peek() const { return write - read; }
-	int Signal(int flags);
+	void Signal(int flags);
 #if defined(CHECK_QUEUE) || defined(CHECK_QUEUE_FULL)
 	int Validate();
 #endif
@@ -412,7 +412,7 @@ public:
 private:
 	friend class RMsRoot;
 	friend int isValidQueue(int pg);
-	friend int ::rms_initialize(int np);
+	friend void ::rms_initialize(int np);
 
 	/*
 		NQuick is the number of items PER-QUEUE that can be "published" (but
@@ -456,7 +456,7 @@ private:
 	Primary setup call for RMs messaging system, supplying the number of 4 KiB
 	pages to use for all control and data storage needs (maximum is 65,536).
 */
-int initialize(int np);
+void initialize(int np);
 
 /*
 	Contains static "publish" methods for all supported data and tag types -
@@ -473,14 +473,14 @@ int initialize(int np);
 class publisher {
 public:
 	// publish "tag/data pair" to any subscription queues with matching patterns
-	static int put_with_tag(std::string_view d, std::string_view t) { return rms_publish_bytes(t, (const unsigned char*)d.data(), (int)d.size()); }
-	static int put_with_tag(const unsigned char* d, int n, std::string_view t) { return rms_publish_bytes(t, d, n); }
-	static int put_with_tag(rms_ieee d, std::string_view t) { return rms_publish_ieee(t, d); }
-	static int put_with_tag(rms_int32 d, std::string_view t) { return rms_publish_int32(t, d); }
-	static int put_with_tag(rms_int64 d, std::string_view t) { return rms_publish_int64(t, d); }
+	static void put_with_tag(std::string_view d, std::string_view t) { rms_publish_bytes(t, (const unsigned char*)d.data(), (int)d.size()); }
+	static void put_with_tag(const unsigned char* d, size_t n, std::string_view t) { rms_publish_bytes(t, d, n); }
+	static void put_with_tag(rms_ieee d, std::string_view t) { rms_publish_ieee(t, d); }
+	static void put_with_tag(rms_int32 d, std::string_view t) { rms_publish_int32(t, d); }
+	static void put_with_tag(rms_int64 d, std::string_view t) { rms_publish_int64(t, d); }
 
 	// publish tag ONLY to any subscription queues with matching patterns
-	static int put_tag(std::string_view t) { return rms_publish_bytes(t, nullptr, 0); }
+	static void put_tag(std::string_view t) { rms_publish_bytes(t, nullptr, 0); }
 };
 
 // alias template for RMs data/tag pairs (tag is ALWAYS a std::string)
@@ -559,14 +559,14 @@ public:
 	~subscription() { close(); }
 
 	// force shutdown of queue - usually better to leave to destructor
-	int close() {
-		const int id_ = id.exchange(0);
-		return id_ ? ((RMsQueue*)pg2xp(id_))->Close() : 0;
+	void close() {
+		if (int id_ = id.exchange(0); id_ != 0)
+			((RMsQueue*)pg2xp(id_))->Close();
 	}
 	// return whether queue has reached "end of data"
 	bool eod() const { return id ? ((RMsQueue*)pg2xp(id))->State() != 0 : true; }
 	// force discarding of all undelivered messages in queue
-	int flush() { return id ? ((RMsQueue*)pg2xp(id))->Flush() : 0; }
+	void flush() { if (id) ((RMsQueue*)pg2xp(id))->Flush(); }
 	// return whether there is a message waiting (i.e., would a get* block?)
 	bool empty() const { return id ? ((RMsQueue*)pg2xp(id))->Peek() == 0 : true; }
 	// compose "eod" and "empty" tests
@@ -578,7 +578,7 @@ public:
 		return true;
 	}
 	// send an OOB (out of band) signal to any waiting reader
-	int signal(int flags) { return id ? ((RMsQueue*)pg2xp(id))->Signal(flags) : 0; }
+	void signal(int flags) { if (id) ((RMsQueue*)pg2xp(id))->Signal(flags); }
 
 	// sign up to receive any published messages with tag matched by pattern
 	void subscribe(std::string_view pattern) { close(), id = RMsQueue::Create(pattern); }
