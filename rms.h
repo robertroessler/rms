@@ -129,8 +129,8 @@ const int QueueMagic = 0x51734d52;		// ('RMsQ')
 //#define CHECK_ALLOC_FULL
 //#define CHECK_QUEUE_FULL
 //#define DUMP_EXPORTED
-//#define DUMP_QUEUE
-//#define DUMP_ROOT
+#define DUMP_QUEUE
+#define DUMP_ROOT
 #else
 #define CHECK_NOTHING
 #endif /* defined(_DEBUG) || defined(DUMP_ALL) */
@@ -309,7 +309,7 @@ public:
 	void RemoveQueue(int pg);
 
 private:
-	friend int isValidQueue(int pg);
+	friend bool isValidQueue(int pg);
 
 	// Link RMs ptr at front of typed free list
 	// N.B. - Call with RMsRoot mutex LOCKED!
@@ -372,14 +372,14 @@ class RMsQueue {
 public:
 	RMsQueue() {}
 
-	int Append(std::string_view tag, const void* data, size_t n, int ty = 0);
+	void Append(std::string_view tag, const void* data, size_t n, int ty = 0);
 	void Close();
 	void Flush();
 	int Match(std::string_view tag) const;
 	int Peek() const { return write - read; }
 	void Signal(int flags);
 #if defined(CHECK_QUEUE) || defined(CHECK_QUEUE_FULL)
-	int Validate();
+	bool Validate();
 #endif
 	int State() const { return state; }
 	int Wait(char* tag, size_t* tagN, void* data, size_t* dataN, int flags);
@@ -411,7 +411,7 @@ public:
 
 private:
 	friend class RMsRoot;
-	friend int isValidQueue(int pg);
+	friend bool isValidQueue(int pg);
 	friend void ::rms_initialize(int np);
 
 	/*
@@ -432,9 +432,9 @@ private:
 		NQuick = 19					// # of "quick" ("direct") queue entries
 	};
 
-	int append(rms_ptr_t tag, rms_ptr_t data);
-	int checkWrite(int& pg, int& pi);
-	int initialize(std::string_view pattern);
+	void append(rms_ptr_t tag, rms_ptr_t data);
+	std::tuple<bool, int, int> checkWrite();
+	bool initialize(std::string_view pattern);
 	// RMs queue read/write pointer -> queue indirect page #
 	constexpr int qp2pq(int p) const { return (p - NQuick) >> 9; }
 	// RMs queue read/write pointer -> queue indirect page index
