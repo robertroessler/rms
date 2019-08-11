@@ -8,12 +8,12 @@ per-process "base" pointer to the shared memory segment, there are NO pointers
 stored in any in-memory structures.  This would make sharing - even if mapped to
 different virtual address ranges in different processes - quite simple.
 
-HINT: think "indices, all the way down". :)
+HINT: think "indices, all the way down". :sunglasses:
 
 As things actually worked out, over the decade this package has been in use, the
 "multi-process" aspects of this architecture were never built out, both because
 of the substantially higher costs of resource coordination/locking INTER-process
-vs INTRA-process, but more subtly, the paradigm of "many cooperating lightweight
+*vs* INTRA-process, but more subtly, the paradigm of "many cooperating lightweight
 threads" utlimately seemed more useful than one of "many cooperating heavyweight
 processes" - at least on a single machine.
 
@@ -24,20 +24,20 @@ use - a 32-bit format was employed that simultaneously encodes location, typing,
 AND length information - really(*).  This design has provided high-performance
 allocation, releasing, and management of resources for the rest of the system.
 
-* - a possible trade-off here has been the "limitation" of message buffer memory
+- a *possible* trade-off here has been the "limitation" of message buffer memory
 to 256 MB (total), as well as individual message "payloads" to 4 KB... see below
 for possible future work in this area.
 
-It is written in fairly idiomatic modern C++ 11/14... although since it was in
+It is written in fairly idiomatic modern C++ 17... although since it was in
 its original version built from "old-school" C/C++, there may be portions of the
 code that are still awaiting a "re-imagining" (again, see below).
 
 The primary "user" (as well as "developer") documentation for rms is present
 in the rms.h header file.  Note that there is a single [non-system] dependency:
 
-https://github.com/robertroessler/rglob
+[UTF-8 Pattern-matcher "sibling" project](https://github.com/robertroessler/rglob)
 
-... the vs2015 project files are expecting RGlob/RMs to be in "sibling" folders,
+... the VS2019 project files are expecting RGlob/RMs to be in "sibling" folders,
 with rglob in a folder [roughly] at "../RGlob-trunk" - but of course, feel free
 to re-arrange any of the project/folder layout.  And, due to its size, the rglob
 library should (as in the included VS files) likely be kept as a "static" lib.
@@ -57,14 +57,14 @@ expect a high-perf / non-blocking logging sink (::OutputDebugString in Windows)
 
 Possible items to work on - for myself or collaborators include
 
-* additonal (and properly laid out) test cases, both to serve as actual tests
+* [DONE!] additonal (and properly laid out) test cases, both to serve as actual tests
 and to show examples of usage - PARTICULARLY displaying multi-threaded use
 
-* investigating a lightweight (lambda-based?) form of "subscription targets"
+* [DONE!] investigating a lightweight (lambda-based?) form of "subscription targets"
 
 * investigating (probably in a "version 2") a 64-bit version for RMs "pointers"
 
-* as only Visual Studio 2015 project and solution files are initially present,
+* as only Visual Studio 2019 project and solution files are initially present,
 control files for building in non-Windows environments could be useful
 
 ## ProbablyNot

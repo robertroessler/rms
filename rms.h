@@ -119,10 +119,10 @@ enum {
 };
 
 //	# of [4KB] pages to commit at each growth
-const int PageIncrement = 16;
+constexpr auto PageIncrement = 16;
 
-const int RootMagic = 0x52734d52;		// ('RMsR')
-const int QueueMagic = 0x51734d52;		// ('RMsQ')
+constexpr auto RootMagic = 0x52734d52;	// ('RMsR')
+constexpr auto QueueMagic = 0x51734d52;	// ('RMsQ')
 
 //#define DUMP_ALL
 #if defined(_DEBUG) || defined(DUMP_ALL)
@@ -160,7 +160,7 @@ constexpr int rp2ty(rms_ptr_t rp)
 // length -> RMs type
 constexpr int n2ty(int nn)
 {
-	int i = 1;
+	auto i = 1;
 	for (; i < 11; i++)
 		if (nn <= (2 << i))
 			break;
@@ -201,8 +201,8 @@ constexpr int xp2pg(void* xp)
 //	RMs ptr -> exposed [H/W] ptr
 constexpr void* rp2xp(rms_ptr_t rp)
 {
-	const int pg = rp >> 16;
-	const int po = rp & (~((2 << ty2logM1(rp2ty(rp))) - 1) & 0x0fff);
+	const auto pg = rp >> 16;
+	const auto po = rp & (~((2 << ty2logM1(rp2ty(rp))) - 1) & 0x0fff);
 	return (char*)pg2xp(pg) + po;
 }
 
@@ -291,6 +291,7 @@ private:
 class RMsRoot {
 public:
 	RMsRoot() {}
+	~RMsRoot() {}
 
 	int AddQueue(int pg);
 	int AllocPage();
@@ -336,8 +337,8 @@ extern RMsRoot* rmsRoot;				// shared "root" object
 //	RMs ptr -> actual data length
 constexpr size_t rp2n(rms_ptr_t rp)
 {
-	const int i = ty2logM1(rp2ty(rp));
-	const int n = rp & ((2 << i) - 1);
+	const auto i = ty2logM1(rp2ty(rp));
+	const auto n = rp & ((2 << i) - 1);
 	return n ? n : (2 << i);
 }
 
@@ -371,6 +372,7 @@ class RMsQueue {
 
 public:
 	RMsQueue() {}
+	~RMsQueue();
 
 	void Append(std::string_view tag, const void* data, size_t n, int ty = 0);
 	void Close();
@@ -560,7 +562,7 @@ public:
 
 	// force shutdown of queue - usually better to leave to destructor
 	void close() {
-		if (int id_ = id.exchange(0); id_ != 0)
+		if (auto id_ = id.exchange(0); id_)
 			((RMsQueue*)pg2xp(id_))->Close();
 	}
 	// return whether queue has reached "end of data"

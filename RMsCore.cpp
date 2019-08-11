@@ -46,14 +46,6 @@
 using namespace std;
 using namespace rms;
 
-//	get "clean" string representation of a std::thread::id
-static inline auto tid2s(thread::id id)
-{
-	ostringstream s;
-	s << hex << id;
-	return s.str();
-}
-
 char* rms::rmsB = nullptr;				// shared memory view pointer(s)
 RMsRoot* rms::rmsRoot = nullptr;		// shared "root" object
 static auto NQPage = 0;					// # of pages of RMsQueue "extras"
@@ -62,6 +54,14 @@ static auto NQPage = 0;					// # of pages of RMsQueue "extras"
 // helpers for *displaying* std::string_view
 constexpr auto _D(std::string_view v) { return v.data(); }
 constexpr auto _S(std::string_view v) { return int(v.size()); }
+
+//	get "clean" string representation of a std::thread::id
+static inline auto tid2s(thread::id id)
+{
+	ostringstream s;
+	s << hex << id;
+	return s.str();
+}
 
 // OS-specific trace function to use
 #if defined(WIN32) || defined(_WIN32)
@@ -682,6 +682,23 @@ void RMsRoot::RemoveQueue(int pg)
 }
 
 /*
+	Perform any needed shutdown / resource-freeing operations on RMsQueue object
+	after first removing from the set of active queue objects.
+*/
+RMsQueue::~RMsQueue()
+{
+	const auto pg = xp2pg(this);
+	dumpQueue("<%d>::~RMsQueue()...removing from list of active queues\n", pg);
+	rmsRoot->RemoveQueue(pg);
+	Flush();
+	dumpQueue("<%d>::~RMsQueue()...freeing %d indirect pages\n", pg, pages);
+	for (auto i = 0; i < pages; i++)
+		rmsRoot->FreePage(pageE[i]);
+	rmsRoot->FreeRP(pattern);
+	rmsRoot->FreePage(pg);
+}
+
+/*
 	Publish tag/data to this subscription queue (I) - perform final parameter
 	validation, and all the higher-level logical checks, allocations, and
 	data copying to prepare the "td pair" for actual enqueuing.
@@ -769,14 +786,7 @@ void RMsQueue::Close()
 	dumpQueue("<%d>::Close()...state=%08x\n", pg, int(state));
 	state |= RMsStatusClosing;
 	if (magic.exchange(0)) {
-		rmsRoot->RemoveQueue(pg);
-		Flush();
-		dumpQueue("<%d>::Close()...freeing %d indirect pages\n", pg, pages);
-		for (auto i = 0; i < pages; i++)
-			rmsRoot->FreePage(pageE[i]);
-		rmsRoot->FreeRP(pattern);
 		this->~RMsQueue();
-		rmsRoot->FreePage(pg);
 		dumpQueue("<%d>::Close()...SUCCESS\n", pg);
 	} else
 		dumpQueue("<%d>::Close()...ALREADY closed\n", pg);
@@ -809,14 +819,10 @@ int RMsQueue::Create(std::string_view pattern)
 void RMsQueue::Flush()
 {
 	lock_guard<RSpinLock> acquire(spin);
-	while (read < write) {
-		td_pair_t td;
-		if (read < NQuick)
-			td = quickE[read];
-		else
-			td = ((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
-		rmsRoot->FreePair(td), read++;
-	}
+	while (read < write)
+		rmsRoot->FreePair(read < NQuick ?
+			quickE[read] :
+			((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)]), read++;
 	read = 0, write = 0, state = 0;
 }
 
