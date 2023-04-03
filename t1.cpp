@@ -36,19 +36,26 @@ int main(int argc, char* argv[])
 	printf("rms_peek => %d\n", rms_peek(id));
 	rms_publish_int64("ad", 84), printf("rms_publish_int64 completed\n");
 	printf("rms_peek => %d\n", rms_peek(id));
+	constexpr auto xs = "THIS is a string!";
+	rms_publish_intptr("ae", (std::intptr_t)xs), printf("rms_publish_intptr completed\n");
+	printf("rms_peek => %d\n", rms_peek(id));
 	int v;
 	long long w;
-	char vb[4], vd[4], vt[4], vu[4];
-	size_t nb = sizeof vb, nd = sizeof vd, nt = sizeof vt, nu = sizeof vu;
-	// ... until AFTER the next 4 "rms_waits"...
+	std::intptr_t x;
+	char vb[4], vd[4], vt[4], vu[4], vx[4];
+	size_t nb = sizeof vb, nd = sizeof vd, nt = sizeof vt, nu = sizeof vu, nx = sizeof vx;
+	// ... until AFTER the next 5 "rms_waits"...
 	if (rms_wait_string(id, nullptr, nullptr, vb, &nb, 1) == 1)
 		printf("rms_wait_string => %s\n", vb);
 	if (rms_wait_string(id, nullptr, nullptr, vd, &nd, 1) == 1)
 		printf("rms_wait_string => %s\n", vd);
 	if (rms_wait_int32(id, vt, &nt, &v, 3) == 3)
-		printf("rms_wait_int32 => '%s'(%zd): %d\n", vt, nt, v);
+		printf("rms_wait_int32  => '%s'(%zd): %d\n", vt, nt, v);
 	if (rms_wait_int64(id, vu, &nu, &w, 3) == 3)
-		printf("rms_wait_int64 => '%s'(%zd): %lld\n", vu, nu, w);
+		printf("rms_wait_int64  => '%s'(%zd): %lld\n", vu, nu, w);
+	if (rms_wait_intptr(id, vx, &nx, &x, 3) == 3)
+		printf("rms_wait_intptr => '%s'(%zd): %p, pointer %s ORIGINAL string!\n",
+			vx, nx, (void*)x, strcmp((char*)x, xs) ? "!=" : "==");
 	// ... as in, NOW
 	printf("rms_peek => %d\n", rms_peek(id));
 	// INSIDE a loop... 

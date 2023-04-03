@@ -1,7 +1,7 @@
 /*
 	rms.h - interface of the RMs messaging system
 
-	Copyright(c) 2004-2019, Robert Roessler
+	Copyright(c) 2004-2023, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -27,6 +27,8 @@
 	POSSIBILITY OF SUCH DAMAGE.
 */
 
+#pragma once
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -34,6 +36,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #ifdef RMSDLL_EXPORTS
 #define RMS_EXPORT extern "C" __declspec(dllexport)
@@ -42,12 +45,16 @@
 #endif
 
 //	the RMs "primitive" data types
-typedef double rms_ieee;
-typedef int rms_int32;
-typedef long long rms_int64;
+using rms_ieee = double;
+using rms_int32 = int;
+using rms_int64 = long long;
+using rms_intptr = std::intptr_t; // (this MUST resolve to either 'int' or 'long long'!)
+
+// type(s) for returning ANY queue element!
+using rms_any = std::variant<rms_int32, rms_int64, rms_ieee, std::string>;
 
 /*
-	With the exception of "rms_initizlize()", the "rms_xxx" entry points are
+	With the exception of "rms_initialize()", the "rms_xxx" entry points are
 	meant to provide "C" access for a lower-level interface to RMs, and in most
 	cases simply add some tracing and argument-checking prior to invoking the
 	"real" object-oriented implementation interface.
@@ -78,6 +85,8 @@ void rms_publish_int32(std::string_view tag, rms_int32 data);
 RMS_EXPORT
 void rms_publish_int64(std::string_view tag, rms_int64 data);
 RMS_EXPORT
+void rms_publish_intptr(std::string_view tag, rms_intptr data);
+RMS_EXPORT
 void rms_publish_string(std::string_view tag, std::string_view data) noexcept(false);
 RMS_EXPORT
 void rms_signal(int id, int flags) noexcept(false);
@@ -92,15 +101,22 @@ int rms_wait_int32(int id, char tag[], size_t* tagN, rms_int32* data, int flags)
 RMS_EXPORT
 int rms_wait_int64(int id, char tag[], size_t* tagN, rms_int64* data, int flags) noexcept(false);
 RMS_EXPORT
+int rms_wait_intptr(int id, char tag[], size_t* tagN, rms_intptr* data, int flags) noexcept(false);
+RMS_EXPORT
 int rms_wait_string(int id, char tag[], size_t* tagN, char data[], size_t* dataN, int flags) noexcept(false);
 
 namespace rms {
 
-enum {
-	RMsTypeAuto = 0,					// derive type from byte length
-	RMsTypeInt32 = 12,					// 32-bit int
-	RMsTypeInt64 = 13,					// 64-bit int
-	RMsTypeIeee = 14					// IEEE double-precision float
+consteval auto isPtrLongLong() { return sizeof(void*) == sizeof(long long); }
+
+enum class RMsType {
+	Auto = 0,							// [input] derive type from byte length
+	Int32 = 12,							// 32-bit int
+	Int64 = 13,							// 64-bit int
+										// 32/64 -bit int... enough for pointer
+	IntPtr = isPtrLongLong() ? Int64 : Int32,
+	Ieee = 14,							// IEEE double-precision float
+	Reserved = 15						// (reserved for future types)
 };
 
 enum {
@@ -124,24 +140,13 @@ constexpr auto PageIncrement = 16;
 constexpr auto RootMagic = 0x52734d52;	// ('RMsR')
 constexpr auto QueueMagic = 0x51734d52;	// ('RMsQ')
 
-//#define DUMP_ALL
-#if defined(_DEBUG) || defined(DUMP_ALL)
-//#define CHECK_ALLOC_FULL
-//#define CHECK_QUEUE_FULL
-//#define DUMP_EXPORTED
-#define DUMP_QUEUE
-#define DUMP_ROOT
-#else
-#define CHECK_NOTHING
-#endif /* defined(_DEBUG) || defined(DUMP_ALL) */
-
-typedef unsigned int rms_ptr_t;			// [RMs] ptr type
+using rms_ptr_t = unsigned int;			// [RMs] ptr type
 
 //	RMs tag/data pair (data may be empty)
-typedef struct {
+using td_pair_t = struct {
 	rms_ptr_t tag;						// [RMs] ptr to tag
 	rms_ptr_t data;						// [RMs] ptr to data
-} td_pair_t;
+};
 
 extern char* rmsB;						// shared memory view pointer(s)
 
@@ -152,23 +157,23 @@ constexpr void* pg2xp(int pg)
 }
 
 //	RMs ptr -> RMs type
-constexpr int rp2ty(rms_ptr_t rp)
+constexpr RMsType rp2ty(rms_ptr_t rp)
 {
-	return (rp >> 12) & 0x0f;
+	return (RMsType)((rp >> 12) & 0x0f);
 }
 
 // length -> RMs type
-constexpr int n2ty(int nn)
+constexpr RMsType n2ty(int nn)
 {
 	auto i = 1;
-	for (; i < 11; i++)
-		if (nn <= (2 << i))
+	for (; i < 11; ++i)
+		if ((unsigned)nn <= (2u << i))
 			break;
-	return i;
+	return (RMsType)i;
 }
 
 //	RMs type -> (binary logarithm of type's [max] length) - 1
-constexpr int ty2logM1(int ty)
+constexpr int ty2logM1(RMsType ty)
 {
 	// assert 0 <= ty <= 15
 	return
@@ -177,19 +182,19 @@ constexpr int ty2logM1(int ty)
 		"\x01"											// int32
 		"\x02"											// int64
 		"\x02"											// double
-		"\x0b"[ty];										// unk
+		"\x0b"[(int)ty];								// unk
 }
 
 // RMs ptr from page, RMs type, and page offset
-constexpr rms_ptr_t make_rp(int pg, int ty, int po)
+constexpr rms_ptr_t make_rp(int pg, RMsType ty, int po)
 {
-	return (pg << 16) | (ty << 12) | po;
+	return (pg << 16) | ((int)ty << 12) | po;
 }
 
 // RMs ptr -> RMs ptr' with encoded data length n
 constexpr rms_ptr_t rp2rp(rms_ptr_t rp, int nn)
 {
-	return (rp & ~((2 << ty2logM1(rp2ty(rp))) - 1)) | ((nn == (2 << ty2logM1(rp2ty(rp)))) ? 0 : nn);
+	return (rp & ~((2u << ty2logM1(rp2ty(rp))) - 1)) | ((nn == (2u << ty2logM1(rp2ty(rp)))) ? 0 : nn);
 }
 
 //	exposed [H/W] ptr -> RMs page
@@ -202,31 +207,31 @@ constexpr int xp2pg(void* xp)
 constexpr void* rp2xp(rms_ptr_t rp)
 {
 	const auto pg = rp >> 16;
-	const auto po = rp & (~((2 << ty2logM1(rp2ty(rp))) - 1) & 0x0fff);
+	const auto po = rp & (~((2u << ty2logM1(rp2ty(rp))) - 1) & 0x0fff);
 	return (char*)pg2xp(pg) + po;
 }
 
 //	Simple spinlock class
 class RSpinLock {
 public:
-	inline void lock() {
+	void lock() {
 		// try simple lock...
 		while (lock_.test_and_set(std::memory_order_acquire))
 			// ... nope, release time slice and keep trying
 			std::this_thread::yield();
 	}
-	inline void unlock() { lock_.clear(std::memory_order_release); }
+	void unlock() { lock_.clear(std::memory_order_release); }
 
 private:
-	std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
+	std::atomic_flag lock_ ATOMIC_FLAG_INIT;
 };
 
 //	Recursive spinlock class
 class RSpinLockEx {
 public:
-	RSpinLockEx() : nobody(), owner(nobody) {}
+	RSpinLockEx() : nobody{}, owner{ nobody } {}
 
-	inline void lock() {
+	void lock() {
 		auto current = std::this_thread::get_id();
 		auto id = nobody;
 		// try simple lock (for current thread)...
@@ -236,18 +241,18 @@ public:
 				std::this_thread::yield(), id = nobody;
 			while (!owner.compare_exchange_weak(id, current));
 		// ... we HAVE the lock, increment our "recursion" count
-		count++;
+		++count_;
 	}
-	inline void unlock() {
+	void unlock() {
 		// with thread's final "unlock", show owner as "no thread"
-		if (--count == 0)
+		if (--count_ == 0)
 			owner.store(nobody, std::memory_order_release);
 	}
 
 private:
 	const std::thread::id nobody;		// value matching NO thread
 	std::atomic<std::thread::id> owner;	// thread ID of lock holder (synch object)
-	int count = 0;						// # of [recursive] locks held
+	int count_{ 0 };					// # of [recursive] locks held
 };
 
 //	Simple semaphore class
@@ -259,17 +264,23 @@ public:
 		cv.notify_all();
 	}
 
-	inline void signal(int n = 1) {
+	void signal(int n = 1) {
 		{
 			std::lock_guard<std::mutex> lock(mt);
 			count_ += n;
 		}
 		cv.notify_one();
 	}
-	inline void wait() {
+	void wait() {
 		std::unique_lock<std::mutex> lock(mt);
 		cv.wait(lock, [this]() { return count_ > 0; });
 		--count_;
+	}
+	// EXPERIMENTAL: "non-consuming" wait
+	// N.B. - ONLY meaningful in "single-consumer" (per semaphore) model!
+	void block() {
+		std::unique_lock<std::mutex> lock(mt);
+		cv.wait(lock, [this]() { return count_ > 0; });
 	}
 
 private:
@@ -295,14 +306,10 @@ public:
 
 	int AddQueue(int pg);
 	int AllocPage();
-	rms_ptr_t AllocRP(int ty, size_t n);
-#if defined(CHECK_ALLOC) || defined(CHECK_ALLOC_FULL)
-	int CheckAlloc(int pg);
-#endif
-#if defined(CHECK_QUEUE) || defined(CHECK_QUEUE_FULL)
-	int CheckQueue(int pg);
-#endif
-	void Distribute(std::string_view tag, const void* data, size_t n, int ty = 0);
+	rms_ptr_t AllocRP(RMsType ty, size_t n);
+	int CheckAlloc(int pg) const;
+	int CheckQueue(int pg) const;
+	void Distribute(std::string_view tag, const void* data, size_t n, RMsType ty = RMsType::Auto);
 	void FreePage(int pg);
 	void FreePair(td_pair_t p);
 	void FreeRP(rms_ptr_t rp);
@@ -314,21 +321,21 @@ private:
 
 	// Link RMs ptr at front of typed free list
 	// N.B. - Call with RMsRoot mutex LOCKED!
-	inline void free_rp(rms_ptr_t rp) {
-		const int ty = rp2ty(rp);
-		*(int*)rp2xp(rp) = typeFree[ty], typeFree[ty] = rp;
+	void free_rp(rms_ptr_t rp) {
+		const auto ty = rp2ty(rp);
+		*(int*)rp2xp(rp) = typeFree[(int)ty], typeFree[(int)ty] = rp;
 	}
 	// N.B. - Call with RMsRoot mutex LOCKED!
-	void initTypedPageAsFree(int pg, int ty);
+	void initTypedPageAsFree(int pg, RMsType ty);
 
-	int magic = RootMagic;				// root magic number ('RMsR')
+	int magic{ RootMagic };				// root magic number ('RMsR')
 	RSpinLockEx spin;					// root [recursive] spinlock
-	volatile int pages = 0;				// # of [4kb] pages RESERVED
-	volatile int committed = 0;			// # of [4kb] pages COMMITTED
-	volatile int high = 0;				// # used / next available
-	volatile int pageFree = 0;			// chain of free pages
-	volatile int queueHead = 0;			// doubly-linked list of queues
-	volatile int queueTail = 0;
+	volatile int pages { 0 };			// # of [4kb] pages RESERVED
+	volatile int committed{ 0 };		// # of [4kb] pages COMMITTED
+	volatile int high{ 0 };				// # used / next available
+	volatile int pageFree{ 0 };			// chain of free pages
+	volatile int queueHead{ 0 };		// doubly-linked list of queues
+	volatile int queueTail{ 0 };
 	rms_ptr_t typeFree[16]{};			// "typed" (sized) free chains
 };
 
@@ -338,8 +345,8 @@ extern RMsRoot* rmsRoot;				// shared "root" object
 constexpr size_t rp2n(rms_ptr_t rp)
 {
 	const auto i = ty2logM1(rp2ty(rp));
-	const auto n = rp & ((2 << i) - 1);
-	return n ? n : (2 << i);
+	const auto n = rp & ((2u << i) - 1);
+	return n ? n : (2u << i);
 }
 
 //	construct and return the appropriate "rvalue" from RMs ptr
@@ -351,7 +358,8 @@ inline U getRValue(rms_ptr_t rp)
 template<>
 inline std::string getRValue(rms_ptr_t rp)
 {
-	return std::string((const char*)rp2xp(rp), rp2n(rp));
+	// since an empty string is written out as a ZERO rms_ptr_t...
+	return rp ? std::string((const char*)rp2xp(rp), rp2n(rp)) : std::string();
 }
 
 /*
@@ -366,23 +374,22 @@ inline std::string getRValue(rms_ptr_t rp)
 	N.B. - There will be an RMsQueue instance for EVERY active subscription.
 */
 class RMsQueue {
-	typedef struct {
+	using pq_pag_t = struct {
 		td_pair_t pqTD[512];			// [4kb] page of [RMs] td_pair_t
-	} pq_pag_t;
+	};
 
 public:
 	RMsQueue() {}
 	~RMsQueue();
 
-	void Append(std::string_view tag, const void* data, size_t n, int ty = 0);
+	void Append(std::string_view tag, const void* data, size_t n, RMsType ty = RMsType::Auto);
+	bool Block() { return semaphore.block(), true; }
 	void Close();
 	void Flush();
 	int Match(std::string_view tag) const;
 	int Peek() const { return write - read; }
 	void Signal(int flags);
-#if defined(CHECK_QUEUE) || defined(CHECK_QUEUE_FULL)
-	bool Validate();
-#endif
+	bool Validate() const;
 	int State() const { return state; }
 	int Wait(char* tag, size_t* tagN, void* data, size_t* dataN, int flags);
 
@@ -394,19 +401,44 @@ public:
 		semaphore.wait();
 		if (state)
 			return RMsStatusSignaled;	// early out; indicate "signaled"
-		const td_pair_t td = read < NQuick ?
+		const auto td = read < NQuick ?
 			quickE[read] :
 			((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
 		if (flags & RMsGetTag)
-			tag = getRValue<std::string>(td.tag);
+			tag = std::move(getRValue<std::string>(td.tag));
 		if (flags & RMsGetData)
-			data = getRValue<T>(td.data);
+			data = std::move(getRValue<T>(td.data));
 		// "consume" element
 		rmsRoot->FreePair(td);
 		std::lock_guard<RSpinLock> acquire(spin);
 		if (++read == write)
 			read = 0, write = 0; // reset to "quick" entries when we can
 		return flags;
+	}
+
+	int Wait3(std::string& tag, rms_any& data) {
+		if (state)
+			return RMsStatusSignaled;	// early out; indicate "signaled"
+		semaphore.wait();
+		if (state)
+			return RMsStatusSignaled;	// early out; indicate "signaled"
+		const auto td = read < NQuick ?
+			quickE[read] :
+			((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
+		switch (rp2ty(td.data)) {
+		case RMsType::Int32: data = getRValue<rms_int32>(td.data); break;
+		case RMsType::Int64: data = getRValue<rms_int64>(td.data); break;
+		case RMsType::Ieee: data = getRValue<rms_ieee>(td.data); break;
+		default:
+			data = std::move(getRValue<std::string>(td.data)); break;
+		}
+		tag = std::move(getRValue<std::string>(td.tag));
+		// "consume" element
+		rmsRoot->FreePair(td);
+		std::lock_guard<RSpinLock> acquire(spin);
+		if (++read == write)
+			read = 0, write = 0; // reset to "quick" entries when we can
+		return 0;
 	}
 
 	static int Create(std::string_view pattern);
@@ -447,9 +479,9 @@ private:
 	RSemaphore semaphore;				// our semaphore
 	rms_ptr_t pattern;					// our [compiled] pattern
 	std::atomic<int> state{ 0 };		// our "state"
-	volatile int read = 0, write = 0;	// [current] read, write ptrs
-	volatile int pages = 0;				// # of [4kb] indirect queue entry pages
-	volatile int prev = 0, next = 0;	// previous, next queues
+	volatile int read{ 0 }, write{ 0 };	// [current] read, write ptrs
+	volatile int pages{ 0 };			// # of [4kb] indirect queue entry pages
+	volatile int prev{ 0 }, next{ 0 };	// previous, next queues
 	td_pair_t quickE[NQuick]{};			// "quick" queue entries
 	unsigned short pageE[4]{};			// [pages of] queue entries (computed #)
 };
@@ -480,6 +512,7 @@ public:
 	static void put_with_tag(rms_ieee d, std::string_view t) { rms_publish_ieee(t, d); }
 	static void put_with_tag(rms_int32 d, std::string_view t) { rms_publish_int32(t, d); }
 	static void put_with_tag(rms_int64 d, std::string_view t) { rms_publish_int64(t, d); }
+	// put_with_tag(rms_intptr d, ... will be implemented by EITHER rms_int32 OR rms_int64
 
 	// publish tag ONLY to any subscription queues with matching patterns
 	static void put_tag(std::string_view t) { rms_publish_bytes(t, nullptr, 0); }
@@ -560,9 +593,11 @@ public:
 	subscription(std::string_view pattern) { subscribe(pattern); }
 	~subscription() { close(); }
 
+	// do NON-CONSUMING wait for message, returning queue validity (blocking)
+	auto block() { return id ? ((RMsQueue*)pg2xp(id))->Block() : false; }
 	// force shutdown of queue - usually better to leave to destructor
 	void close() {
-		if (auto id_ = id.exchange(0); id_)
+		if (const auto id_ = id.exchange(0); id_)
 			((RMsQueue*)pg2xp(id_))->Close();
 	}
 	// return whether queue has reached "end of data"
@@ -594,6 +629,16 @@ public:
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetData);
 		return data;
 	}
+	// get next <any> DATA item from queue (blocking)
+	// N.B. - typically used in "logging" queue readers or RMs maintenance
+	template<>
+	rms_any get() {
+		std::string tag;
+		rms_any data;
+		if (id)
+			((RMsQueue*)pg2xp(id))->Wait3(tag, data);
+		return data;
+	}
 	// get next TAG item in queue (blocking)
 	std::string get_tag() {
 		std::string tag;
@@ -605,11 +650,19 @@ public:
 	// get next typed DATA item / TAG pair from queue (blocking)
 	template<typename T>
 	rms_pair<T> get_with_tag() {
-		std::string tag;
-		T data{};
+		rms_pair<T> rp;
 		if (id)
-			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetTag | RMsGetData);
-		return { data, tag };
+			((RMsQueue*)pg2xp(id))->Wait2(rp.second, rp.first, RMsGetTag | RMsGetData);
+		return rp;
+	}
+	// get next <any> DATA item / tag pair from queue (blocking)
+	// N.B. - typically used in "logging" queue readers or RMs maintenance
+	template<>
+	rms_pair<rms_any> get_with_tag() {
+		rms_pair<rms_any> rp;
+		if (id)
+			((RMsQueue*)pg2xp(id))->Wait3(rp.second, rp.first);
+		return rp;
 	}
 
 	// get next typed DATA item in queue (extraction operator >>)
