@@ -64,7 +64,7 @@ int main(int argc, char* argv[])
 	}
 	const auto t1 = high_resolution_clock::now();
 	cout << "timing for " << Iterations * Transactions << " Publish/Wait pairs = "
-		<< (duration_cast<microseconds>(t1 - t0).count() / (double(Iterations) * Transactions / 1000)) << " ns/round-trip" << endl;
+		<< (duration_cast<nanoseconds>(t1 - t0).count() / (double(Iterations) * Transactions)) << " ns/round-trip" << endl;
 	// now for some exciting multi-threaded tests...
 	// ... first, create a thread watching our queue
 	std::thread t([&]() {

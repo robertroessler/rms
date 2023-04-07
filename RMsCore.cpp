@@ -357,11 +357,11 @@ void rms_publish_string(std::string_view tag, std::string_view data) noexcept(fa
 	dumpExported("rms_publish_string('{}','{:.8}...')...()\n", tag, data);
 	if (tag.empty())
 		return;	// we're OUTTA here!
-	// N.B. - limit any data to 0 <= strlen(data) <= 4095!
+	// N.B. - limit any data to 0 <= strlen(data) <= 4096!
 	if (data.size() > 4096)
 		throw invalid_argument(string("rms_publish_string passed invalid length ") + to_string(data.size()));
 	dumpExported("rms_publish_string('{}'...)...Distribute()\n", tag);
-	rmsRoot->Distribute(tag, data.data(), (int)data.size());
+	rmsRoot->Distribute(tag, data.data(), data.size());
 }
 
 RMS_EXPORT
@@ -609,7 +609,7 @@ int RMsRoot::CheckQueue(int pg) const
 		lock_guard<rms::RSpinLockEx> acquire(remove_const_t<rms::RSpinLockEx>(spin));
 		for (auto q = queueHead; q; q = ((RMsQueue*)pg2xp(q))->next)
 			if (q == pg)
-				n++;
+				++n;
 		if (!n)
 			dumpCheck("RMsRoot::CheckQueue({})... is BOGUS (NOT found)\n", pg);
 		else if (n > 1)
@@ -738,7 +738,7 @@ RMsQueue::~RMsQueue()
 	rmsRoot->RemoveQueue(pg);
 	Flush();
 	dumpQueue("<{}>::~RMsQueue()...freeing {} indirect pages\n", pg, remove_volatile_t<int>(pages));
-	for (auto i = 0; i < pages; i++)
+	for (auto i = 0; i < pages; ++i)
 		rmsRoot->FreePage(pageE[i]);
 	rmsRoot->FreeRP(pattern);
 	rmsRoot->FreePage(pg);
@@ -792,7 +792,7 @@ void RMsQueue::append(rms_ptr_t tag, rms_ptr_t data)
 		return rmsRoot->FreePair(td);	// early out; "signaled"
 	if (const auto [status, pg, pi] = checkWrite(); status)
 		(write < NQuick ? quickE[write] : ((pq_pag_t*)pg2xp(pg))->pqTD[pi]) = td,
-			write++, semaphore.signal();
+			++write, semaphore.signal();
 	else
 		rmsRoot->FreePair(td);
 	dumpQueue("<{}>::append({:x}:{:x})...{}\n", xp2pg(this), tag, data, remove_volatile_t<int>(write));
@@ -867,7 +867,7 @@ void RMsQueue::Flush()
 	while (read < write)
 		rmsRoot->FreePair(read < NQuick ?
 			quickE[read] :
-			((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)]), read++;
+			((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)]), ++read;
 	read = 0, write = 0, state = 0;
 }
 

@@ -507,7 +507,7 @@ void initialize(int np);
 class publisher {
 public:
 	// publish "tag/data pair" to any subscription queues with matching patterns
-	static void put_with_tag(std::string_view d, std::string_view t) { rms_publish_bytes(t, (const unsigned char*)d.data(), (int)d.size()); }
+	static void put_with_tag(std::string_view d, std::string_view t) { rms_publish_string(t, d); }
 	static void put_with_tag(const unsigned char* d, size_t n, std::string_view t) { rms_publish_bytes(t, d, n); }
 	static void put_with_tag(rms_ieee d, std::string_view t) { rms_publish_ieee(t, d); }
 	static void put_with_tag(rms_int32 d, std::string_view t) { rms_publish_int32(t, d); }

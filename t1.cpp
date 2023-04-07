@@ -78,6 +78,6 @@ int main(int argc, char* argv[])
 	const auto t1 = high_resolution_clock::now();
 	rms_close(id);
 	printf("timing for %d Publish/Wait pairs = %g ns/round-trip\n", Iterations * Transactions,
-		(duration_cast<microseconds>(t1 - t0).count() / (double(Iterations) * Transactions / 1000)));
+		(duration_cast<nanoseconds>(t1 - t0).count() / (double(Iterations) * Transactions)));
 	return 0;
 }
