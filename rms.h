@@ -53,58 +53,6 @@ using rms_intptr = std::intptr_t; // (this MUST resolve to either 'int' or 'long
 // type(s) for returning ANY queue element!
 using rms_any = std::variant<rms_int32, rms_int64, rms_ieee, std::string>;
 
-/*
-	With the exception of "rms_initialize()", the "rms_xxx" entry points are
-	meant to provide "C" access for a lower-level interface to RMs, and in most
-	cases simply add some tracing and argument-checking prior to invoking the
-	"real" object-oriented implementation interface.
-
-	Both these and the public calls on the RMsRoot and RMsQueue objects are
-	considered deprecated for general use, with the suggested interface to RMs
-	being exemplified by the "rms::publisher" and "rms::subscription" classes.
-*/
-
-RMS_EXPORT
-void rms_close(int id) noexcept(false);
-RMS_EXPORT
-void rms_flush(int id) noexcept(false);
-RMS_EXPORT
-void rms_initialize(int np) noexcept(false);
-#ifdef _DEBUG
-RMS_EXPORT
-int rms_is_valid_queue(int id);
-#endif
-RMS_EXPORT
-int rms_peek(int id) noexcept(false);
-RMS_EXPORT
-void rms_publish_bytes(std::string_view tag, const unsigned char* data, size_t n) noexcept(false);
-RMS_EXPORT
-void rms_publish_ieee(std::string_view tag, rms_ieee data);
-RMS_EXPORT
-void rms_publish_int32(std::string_view tag, rms_int32 data);
-RMS_EXPORT
-void rms_publish_int64(std::string_view tag, rms_int64 data);
-RMS_EXPORT
-void rms_publish_intptr(std::string_view tag, rms_intptr data);
-RMS_EXPORT
-void rms_publish_string(std::string_view tag, std::string_view data) noexcept(false);
-RMS_EXPORT
-void rms_signal(int id, int flags) noexcept(false);
-RMS_EXPORT
-int rms_subscribe(std::string_view pattern) noexcept(false);
-RMS_EXPORT
-int rms_wait_bytes(int id, char tag[], size_t* tagN, unsigned char data[], size_t* dataN, int flags) noexcept(false);
-RMS_EXPORT
-int rms_wait_ieee(int id, char tag[], size_t* tagN, rms_ieee* data, int flags) noexcept(false);
-RMS_EXPORT
-int rms_wait_int32(int id, char tag[], size_t* tagN, rms_int32* data, int flags) noexcept(false);
-RMS_EXPORT
-int rms_wait_int64(int id, char tag[], size_t* tagN, rms_int64* data, int flags) noexcept(false);
-RMS_EXPORT
-int rms_wait_intptr(int id, char tag[], size_t* tagN, rms_intptr* data, int flags) noexcept(false);
-RMS_EXPORT
-int rms_wait_string(int id, char tag[], size_t* tagN, char data[], size_t* dataN, int flags) noexcept(false);
-
 namespace rms {
 
 consteval auto isPtrLongLong() { return sizeof(void*) == sizeof(long long); }
@@ -149,6 +97,10 @@ using td_pair_t = struct {
 };
 
 extern char* rmsB;						// shared memory view pointer(s)
+
+#ifdef _DEBUG
+extern int is_valid_queue(int id);
+#endif
 
 //	RMs page -> exposed [H/W] ptr
 constexpr void* pg2xp(int pg)
@@ -266,20 +218,20 @@ public:
 
 	void signal(int n = 1) {
 		{
-			std::lock_guard<std::mutex> lock(mt);
+			std::lock_guard lock(mt);
 			count_ += n;
 		}
 		cv.notify_one();
 	}
 	void wait() {
-		std::unique_lock<std::mutex> lock(mt);
+		std::unique_lock lock(mt);
 		cv.wait(lock, [this]() { return count_ > 0; });
 		--count_;
 	}
 	// EXPERIMENTAL: "non-consuming" wait
 	// N.B. - ONLY meaningful in "single-consumer" (per semaphore) model!
 	void block() {
-		std::unique_lock<std::mutex> lock(mt);
+		std::unique_lock lock(mt);
 		cv.wait(lock, [this]() { return count_ > 0; });
 	}
 
@@ -297,7 +249,7 @@ private:
 	A single [recursive] mutex object is used to synchronize all access to the
 	root data structures and elements.
 
-	N.B. - There will be exactly ONE instance of RMsRoot.
+	N.B. - There will be exactly ONE [singleton] instance of RMsRoot.
 */
 class RMsRoot {
 public:
@@ -307,8 +259,8 @@ public:
 	int AddQueue(int pg);
 	int AllocPage();
 	rms_ptr_t AllocRP(RMsType ty, size_t n);
-	int CheckAlloc(int pg) const;
-	int CheckQueue(int pg) const;
+	int CheckAlloc(int pg) /*const*/;
+	int CheckQueue(int pg) /*const*/;
 	void Distribute(std::string_view tag, const void* data, size_t n, RMsType ty = RMsType::Auto);
 	void FreePage(int pg);
 	void FreePair(td_pair_t p);
@@ -386,12 +338,11 @@ public:
 	bool Block() { return semaphore.block(), true; }
 	void Close();
 	void Flush();
-	int Match(std::string_view tag) const;
+	bool Match(std::string_view tag) const;
 	int Peek() const { return write - read; }
 	void Signal(int flags);
 	bool Validate() const;
 	int State() const { return state; }
-	int Wait(char* tag, size_t* tagN, void* data, size_t* dataN, int flags);
 
 	template<typename T>
 	int Wait2(std::string& tag, T& data, int flags)
@@ -446,7 +397,7 @@ public:
 private:
 	friend class RMsRoot;
 	friend bool isValidQueue(int pg);
-	friend void ::rms_initialize(int np);
+	friend void initialize(int np);
 
 	/*
 		NQuick is the number of items PER-QUEUE that can be "published" (but
@@ -490,35 +441,48 @@ private:
 	Primary setup call for RMs messaging system, supplying the number of 4 KiB
 	pages to use for all control and data storage needs (maximum is 65,536).
 */
-void initialize(int np);
+void initialize(int np) noexcept(false);
 
 /*
 	Contains static "publish" methods for all supported data and tag types -
 	note that "data-less" tags may be published, but publication of "tag-less"
 	data is NOT allowed, as there would be no way to match with subscriptions
 	for delivery.
-
-	N.B. - there is a fundamental asymmetry when publishing using [the new]
-	std::string_view as a data source... while it is a convenient and performant
-	data model to use for "output", in the general case the reverse is not true,
-	as there are serious issues raised with respect to "ownership" and lifetime
-	of the underlying character data being "viewed".
 */
 class publisher {
+	// return RMs "type" from associated C/C++ language type
+	template<typename T>
+	static constexpr auto ty_of(T v) { return RMsType::Auto; }
+	template<>
+	static constexpr auto ty_of(rms_int32 v) { return RMsType::Int32; }
+	template<>
+	static constexpr auto ty_of(rms_int64 v) { return RMsType::Int64; }
+	template<>
+	static constexpr auto ty_of(rms_ieee v) { return RMsType::Ieee; }
+	//rms_intptr already handled above as EITHER rms_int32 OR rms_int64
+
+	template<typename T>
+	static void publish(std::string_view t, T d) { rmsRoot->Distribute(t, &d, sizeof(d), ty_of(d)); }
+	template<>
+	static void publish(std::string_view t, std::string_view d) { rmsRoot->Distribute(t, d.data(), d.size()); }
+	template<>
+	static void publish(std::string_view t, nullptr_t d) { rmsRoot->Distribute(t, nullptr, 0); }
+
 public:
 	// publish "tag/data pair" to any subscription queues with matching patterns
-	static void put_with_tag(std::string_view d, std::string_view t) { rms_publish_string(t, d); }
-	static void put_with_tag(const unsigned char* d, size_t n, std::string_view t) { rms_publish_bytes(t, d, n); }
-	static void put_with_tag(rms_ieee d, std::string_view t) { rms_publish_ieee(t, d); }
-	static void put_with_tag(rms_int32 d, std::string_view t) { rms_publish_int32(t, d); }
-	static void put_with_tag(rms_int64 d, std::string_view t) { rms_publish_int64(t, d); }
-	// put_with_tag(rms_intptr d, ... will be implemented by EITHER rms_int32 OR rms_int64
+	template<typename T>
+	requires std::integral<T> || std::floating_point<T>
+	static void put_with_tag(T d, std::string_view t) { publish(t, d); }
+
+	// (CANNOT be a template specialization at this "outer" level...
+	// ... we NEED the std::string_view type matching / conversions)
+	static void put_with_tag(std::string_view d, std::string_view t) { publish(t, d); }
 
 	// publish tag ONLY to any subscription queues with matching patterns
-	static void put_tag(std::string_view t) { rms_publish_bytes(t, nullptr, 0); }
+	static void put_tag(std::string_view t) { publish(t, nullptr); }
 };
 
-// alias template for RMs data/tag pairs (tag is ALWAYS a std::string)
+// alias template for RMs data/tag pairs (tag is ALWAYS a std::string_view)
 template<typename T>
 using rms_pair = std::pair<T, std::string>;
 
