@@ -14,12 +14,17 @@ using std::cout, std::endl, std::boolalpha, std::string;
 using namespace std::chrono;
 using namespace rms;
 
+constexpr auto qa_multi_q_bare = false;	// (simple[r] case - flushes for extra puts)
+constexpr auto qa_multi_q_full = false;	// (full case - do real gets for extra puts)
+
 int main(int argc, char* argv[])
 {
 	// start up RMs with 4 MB
 	initialize(1024), cout << "rms::initialize completed" << endl;
 	// accept any tag that STARTS with a OR t, followed by ZERO or MORE anything
 	subscription sub("[at]*");
+	// (used to CONDITIONALLY test multi-queue perf)
+	subscription sub2, sub3, sub4, sub5;
 	// sub should be EMPTY
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// publish message sub is NOT subscribed to...
@@ -48,6 +53,11 @@ int main(int argc, char* argv[])
 	// ... as in, NOW
 	cout << "rms::empty => " << boolalpha << sub.empty() << endl;
 	// INSIDE a loop... 
+	if constexpr (qa_multi_q_bare || qa_multi_q_full)
+		sub2.subscribe("t*"),
+		sub3.subscribe("ta*"),
+		sub4.subscribe("tag"),
+		sub5.subscribe("t?g");
 	const auto t0 = high_resolution_clock::now();
 	for (auto i = 0; i < Iterations; i++) {
 		// ... publish 10 messages...
@@ -55,12 +65,29 @@ int main(int argc, char* argv[])
 			publisher::put_with_tag(42LL, "tag");
 		long long sum = 0;
 		// ... and then consume them
-		for (auto j = 0; j < Transactions; j++)
+		for (auto j = 0; j < Transactions; j++) {
 			// do something with the returned data
 			sum += sub.get<long long>();
+			if constexpr (qa_multi_q_bare)
+				sub2.flush(),
+				sub3.flush(),
+				sub4.flush(),
+				sub5.flush();
+			else if constexpr (qa_multi_q_full)
+				sum += sub2.get<long long>(),
+				sum += sub3.get<long long>(),
+				sum += sub4.get<long long>(),
+				sum += sub5.get<long long>();
+		}
 	}
 	const auto t1 = high_resolution_clock::now();
-	cout << "timing for " << Iterations * Transactions << " Publish/Wait pairs = "
-		<< (duration_cast<nanoseconds>(t1 - t0).count() / (double(Iterations) * Transactions)) << " ns/round-trip" << endl;
+	auto multiplier = 1;
+	if constexpr (qa_multi_q_bare || qa_multi_q_full)
+		multiplier *= 5;
+	auto label = " Publish/Get pairs = ";
+	if constexpr (qa_multi_q_bare)
+		label = " Publish/Get (or Flush) pairs = ";
+	cout << "timing for " << Iterations * Transactions * multiplier << label
+		<< (duration_cast<nanoseconds>(t1 - t0).count() / (double(Iterations) * Transactions * multiplier)) << " ns/round-trip" << endl;
 	return 0;
 }

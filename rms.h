@@ -37,6 +37,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <map>
 
 #ifdef RMSDLL_EXPORTS
 #define RMS_EXPORT extern "C" __declspec(dllexport)
@@ -282,6 +283,8 @@ private:
 
 	int magic{ RootMagic };				// root magic number ('RMsR')
 	RSpinLockEx spin;					// root [recursive] spinlock
+										// accelerator for tag->lookups
+	std::multimap<std::string, int, std::less<>> matches;
 	volatile int pages { 0 };			// # of [4kb] pages RESERVED
 	volatile int committed{ 0 };		// # of [4kb] pages COMMITTED
 	volatile int high{ 0 };				// # used / next available
