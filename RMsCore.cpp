@@ -109,7 +109,7 @@ static void dumpRoot(string_view fmt, const ARGS&... args) {
 		auto tracePre = []() {
 			return format("RMsRoot[{}]::", std::this_thread::get_id());
 		};
-		rms_trace(vformat(tracePre().append(fmt), make_format_args(args...)).c_str());
+		rms_trace(vformat(tracePre().append(fmt), std::make_format_args(args...)).data());
 	}
 }
 
@@ -121,7 +121,7 @@ static void dumpQueue(string_view fmt, const ARGS&... args) {
 		auto tracePre = []() {
 			return format("RMsQueue[{}]::", std::this_thread::get_id());
 		};
-		rms_trace(vformat(tracePre().append(fmt), make_format_args(args...)).c_str());
+		rms_trace(vformat(tracePre().append(fmt), std::make_format_args(args...)).data());
 	}
 }
 
@@ -129,7 +129,7 @@ static void dumpQueue(string_view fmt, const ARGS&... args) {
 template <typename... ARGS>
 static void dumpCheck(string_view fmt, const ARGS&... args) {
 	if constexpr (qa_check_alloc_full || qa_check_queue_full)
-		rms_trace(vformat(fmt, make_format_args(args...)).c_str());
+		rms_trace(vformat(fmt, std::make_format_args(args...)).data());
 }
 
 /*
@@ -242,6 +242,7 @@ int RMsRoot::AddQueue(int pg)
 {
 	dumpRoot("AddQueue({})...\n", pg);
 	std::lock_guard acquire(spin);
+	matches.clear();
 	((RMsQueue*)pg2xp(pg))->prev = queueTail;
 	((RMsQueue*)pg2xp(pg))->next = 0;
 	if (queueTail)
@@ -376,9 +377,19 @@ int RMsRoot::CheckQueue(int pg) //const
 void RMsRoot::Distribute(string_view tag, const void* data, size_t n, RMsType ty)
 {
 	std::lock_guard acquire(spin);
-	for (auto q = queueHead; q; q = ((RMsQueue*)pg2xp(q))->next)
-		if (((RMsQueue*)pg2xp(q))->Match(tag))
-			((RMsQueue*)pg2xp(q))->Append(tag, data, n, ty);
+	// check for cached tag->queue pairs...
+	auto tqp = matches.equal_range(tag);
+	if (tqp.first == tqp.second) {
+		// ... NO match, cache ALL queues which match this tag...
+		for (auto q = queueHead; q; q = ((RMsQueue*)pg2xp(q))->next)
+			if (((RMsQueue*)pg2xp(q))->Match(tag))
+				matches.insert(std::pair(tag, q));
+		// ... and re-compute the initial cache query
+		tqp = matches.equal_range(tag);
+	}
+	// deliver to ALL cached tag->queue pairs which [now] match
+	for (auto i = tqp.first; i != tqp.second; ++i)
+		((RMsQueue*)pg2xp(i->second))->Append(tag, data, n, ty);
 }
 
 /*
@@ -466,6 +477,7 @@ void RMsRoot::RemoveQueue(int pg)
 {
 	dumpRoot("RemoveQueue({})...\n", pg);
 	std::lock_guard acquire(spin);
+	matches.clear();
 	const auto prev = ((RMsQueue*)pg2xp(pg))->prev;
 	const auto next = ((RMsQueue*)pg2xp(pg))->next;
 	if (prev)
@@ -638,7 +650,7 @@ bool RMsQueue::initialize(string_view pattern)
 	const auto rp = rmsRoot->AllocRP(RMsType::Auto, (int)n);
 	if (!rp)
 		return false;	// we're OUTTA here!
-	memcpy(rp2xp(rp), fsm.c_str(), n);
+	memcpy(rp2xp(rp), fsm.data(), n);
 	RMsQueue::pattern = rp;
 	return true;	// indicate success
 }
