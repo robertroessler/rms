@@ -54,6 +54,23 @@ using rms_intptr = std::intptr_t; // (this MUST resolve to either 'int' or 'long
 // type(s) for returning ANY queue element!
 using rms_any = std::variant<rms_int32, rms_int64, rms_ieee, std::string>;
 
+template<class T>
+concept rms_num_type =
+std::same_as<T, rms_int32> ||
+std::same_as<T, rms_int64> ||
+std::same_as<T, rms_ieee>;
+
+template<class T>
+concept rms_full_type =
+rms_num_type<T> ||
+std::same_as<T, std::nullptr_t> ||
+std::same_as<T, std::string_view>;
+
+template<class T>
+concept rms_string_view =
+!std::same_as<T, nullptr_t> &&
+std::convertible_to<T, std::string_view>;
+
 namespace rms {
 
 consteval auto isPtrLongLong() { return sizeof(void*) == sizeof(long long); }
@@ -65,7 +82,7 @@ enum class RMsType {
 										// 32/64 -bit int... enough for pointer
 	IntPtr = isPtrLongLong() ? Int64 : Int32,
 	Ieee = 14,							// IEEE double-precision float
-	Reserved = 15						// (reserved for future types)
+	Record = 15							// Record made of RMs "primitive" types
 };
 
 enum {
@@ -103,19 +120,13 @@ extern char* rmsB;						// shared memory view pointer(s)
 extern int is_valid_queue(int id);
 #endif
 
-//	RMs page -> exposed [H/W] ptr
-constexpr void* pg2xp(int pg)
-{
-	return rmsB + (ptrdiff_t(pg) << 12);
-}
-
 //	RMs ptr -> RMs type
 constexpr RMsType rp2ty(rms_ptr_t rp)
 {
 	return (RMsType)((rp >> 12) & 0x0f);
 }
 
-// length -> RMs type
+// [byte] length -> RMs [string] type coding
 constexpr RMsType n2ty(int nn)
 {
 	auto i = 1;
@@ -135,7 +146,7 @@ constexpr int ty2logM1(RMsType ty)
 		"\x01"											// int32
 		"\x02"											// int64
 		"\x02"											// double
-		"\x0b"[(int)ty];								// unk
+		"\x05"[(int)ty];								// record (1-16 fields)
 }
 
 // RMs ptr from page, RMs type, and page offset
@@ -144,16 +155,32 @@ constexpr rms_ptr_t make_rp(int pg, RMsType ty, int po)
 	return (pg << 16) | ((int)ty << 12) | po;
 }
 
-// RMs ptr -> RMs ptr' with encoded data length n
+// RMs ptr -> RMs ptr' with encoded data length nn
 constexpr rms_ptr_t rp2rp(rms_ptr_t rp, int nn)
 {
-	return (rp & ~((2u << ty2logM1(rp2ty(rp))) - 1)) | ((nn == (2u << ty2logM1(rp2ty(rp)))) ? 0 : nn);
+	const auto pl2m1 = ty2logM1(rp2ty(rp)); // (pseudo "log2 - 1")
+	const auto max_n = 2u << pl2m1;
+	return (rp & ~(max_n - 1)) | (nn == max_n ? 0 : nn);
+}
+
+//	RMs ptr -> actual data length
+constexpr size_t rp2n(rms_ptr_t rp)
+{
+	const auto i = ty2logM1(rp2ty(rp));
+	const auto n = rp & ((2u << i) - 1);
+	return n ? n : (2u << i);
 }
 
 //	exposed [H/W] ptr -> RMs page
 constexpr int xp2pg(void* xp)
 {
 	return (int)((char*)xp - rmsB) >> 12;
+}
+
+//	RMs page -> exposed [H/W] ptr
+constexpr void* pg2xp(int pg)
+{
+	return rmsB + (ptrdiff_t(pg) << 12);
 }
 
 //	RMs ptr -> exposed [H/W] ptr
@@ -262,14 +289,20 @@ public:
 	rms_ptr_t AllocRP(RMsType ty, size_t n);
 	int CheckAlloc(int pg) /*const*/;
 	int CheckQueue(int pg) /*const*/;
-	void Distribute(std::string_view tag, const void* data, size_t n, RMsType ty = RMsType::Auto);
+	template<rms_full_type T>
+	void Distribute(std::string_view tag, T d);
 	void FreePage(int pg);
 	void FreePair(td_pair_t p);
 	void FreeRP(rms_ptr_t rp);
 	bool Initialize(int np);
+	template<rms_full_type T>
+	rms_ptr_t Marshal(T d);
+	template<>
+	rms_ptr_t Marshal(std::nullptr_t d) [[deprecated]] { return rms_ptr_t{}; /* "can't happen" */ }
 	void RemoveQueue(int pg);
 
 private:
+	friend class publisher;
 	friend bool isValidQueue(int pg);
 
 	// Link RMs ptr at front of typed free list
@@ -292,30 +325,12 @@ private:
 	volatile int queueHead{ 0 };		// doubly-linked list of queues
 	volatile int queueTail{ 0 };
 	rms_ptr_t typeFree[16]{};			// "typed" (sized) free chains
+
+	// N.B. - Call with RMsRoot mutex LOCKED!
+	auto get_matches(std::string_view tag) -> decltype(matches.equal_range(tag));
 };
 
 extern RMsRoot* rmsRoot;				// shared "root" object
-
-//	RMs ptr -> actual data length
-constexpr size_t rp2n(rms_ptr_t rp)
-{
-	const auto i = ty2logM1(rp2ty(rp));
-	const auto n = rp & ((2u << i) - 1);
-	return n ? n : (2u << i);
-}
-
-//	construct and return the appropriate "rvalue" from RMs ptr
-template<typename U>
-inline U getRValue(rms_ptr_t rp)
-{
-	return *(U*)rp2xp(rp);
-}
-template<>
-inline std::string getRValue(rms_ptr_t rp)
-{
-	// since an empty string is written out as a ZERO rms_ptr_t...
-	return rp ? std::string((const char*)rp2xp(rp), rp2n(rp)) : std::string();
-}
 
 /*
 	RMsQueue is the controlling object for a "subscription", orchestrating all
@@ -333,11 +348,28 @@ class RMsQueue {
 		td_pair_t pqTD[512];			// [4kb] page of [RMs] td_pair_t
 	};
 
+	//	construct and return the appropriate "rvalue" from RMs ptr
+	template<typename U>
+	static inline constexpr U getRValue(rms_ptr_t rp)
+	{
+		return *(U*)rp2xp(rp);
+	}
+	template<>
+	static inline constexpr std::string getRValue(rms_ptr_t rp)
+	{
+		// since an empty string is written out as a ZERO rms_ptr_t...
+		return rp ? std::string((const char*)rp2xp(rp), rp2n(rp)) : std::string();
+	}
+
 public:
 	RMsQueue() {}
 	~RMsQueue();
 
-	void Append(std::string_view tag, const void* data, size_t n, RMsType ty = RMsType::Auto);
+	template<rms_full_type T>
+	void Append(std::string_view tag, T d);
+	template<>
+	void Append(std::string_view tag, nullptr_t d);
+	void Append(std::string_view tag, rms_ptr_t dRP);
 	bool Block() { return semaphore.block(), true; }
 	void Close();
 	void Flush();
@@ -451,8 +483,15 @@ void initialize(int np) noexcept(false);
 	note that "data-less" tags may be published, but publication of "tag-less"
 	data is NOT allowed, as there would be no way to match with subscriptions
 	for delivery.
+
+	N.B. - put(...) and put_with_tag(...) public methods are EXACTLY equivalent,
+	but ...with_tag versions MAY get deprecated, as we add new methods / syntax
+	supporting "record" pub/sub operations.
 */
 class publisher {
+	friend class RMsRoot;
+	friend class RMsQueue;
+
 	// return RMs "type" from associated C/C++ language type
 	template<typename T>
 	static constexpr auto ty_of(T v) { return RMsType::Auto; }
@@ -464,28 +503,65 @@ class publisher {
 	static constexpr auto ty_of(rms_ieee v) { return RMsType::Ieee; }
 	//rms_intptr already handled above as EITHER rms_int32 OR rms_int64
 
-	template<typename T>
-	static void publish(std::string_view t, T d) { rmsRoot->Distribute(t, &d, sizeof(d), ty_of(d)); }
+	template<rms_full_type T>
+	__declspec(deprecated("n_of of rms_full_type")) static constexpr auto n_of(T v) { return sizeof v; }
 	template<>
-	static void publish(std::string_view t, std::string_view d) { rmsRoot->Distribute(t, d.data(), d.size()); }
-	template<>
-	static void publish(std::string_view t, nullptr_t d) { rmsRoot->Distribute(t, nullptr, 0); }
+	__declspec(deprecated("n_of of std::string_view")) static constexpr auto n_of(std::string_view v) { return v.size(); }
+
+	template<rms_num_type T>
+	static constexpr auto coerce(T v) {
+		return v;
+	}
+
+	template<rms_string_view T>
+	__declspec(deprecated("coerce of std::string_view")) static constexpr auto coerce(T v) {
+		return std::string_view(v);
+	}
+
+	template<rms_full_type T>
+	static constexpr void publish(std::string_view t, T d) { rmsRoot->Distribute(t, d); }
+
+	static constexpr void publish_rec(std::string_view t, const auto&& ...d) {
+		std::lock_guard acquire(rmsRoot->spin);
+		auto tqp = rmsRoot->get_matches(t);
+		// deliver to ALL cached tag->queue pairs which [now] match
+		for (auto i = tqp.first; i != tqp.second; ++i) {
+			const auto rec = rmsRoot->AllocRP(RMsType::Record, sizeof...(d) * sizeof rms_ptr_t);
+			auto e = (rms_ptr_t*)rp2xp(rec);
+			auto ee = [&](auto&& v) { *e++ = rmsRoot->Marshal(v); };
+			(ee(d), ...);
+			((RMsQueue*)pg2xp(i->second))->Append(t, rec);
+		}
+	}
 
 public:
 	// publish "tag/data pair" to any subscription queues with matching patterns
-	template<typename T>
-	requires std::integral<T> || std::floating_point<T>
+	template<rms_num_type T>
 	static void put_with_tag(T d, std::string_view t) { publish(t, d); }
 
 	// (CANNOT be a template specialization at this "outer" level...
 	// ... we NEED the std::string_view type matching / conversions)
-	static void put_with_tag(std::string_view d, std::string_view t) { publish(t, d); }
+	template<rms_string_view T>
+	static void put_with_tag(T d, std::string_view t) { publish(t, std::string_view(d)); }
+
+	// publish "tag/data pair" to any subscription queues with matching patterns
+	template<rms_num_type T>
+	__declspec(deprecated("put used with rms_num_type")) static void put(std::string_view t, T d) { publish(t, d); }
+
+	// (CANNOT be a template specialization at this "outer" level...
+	// ... we NEED the std::string_view type matching / conversions)
+	template<rms_string_view T>
+	__declspec(deprecated("put used with rms_string_view")) static void put(std::string_view t, T d) { publish(t, std::string_view(d)); }
+
+	static void put_rec(std::string_view t, auto&& ...d) {
+		publish_rec(t, coerce(d)...);
+	}
 
 	// publish tag ONLY to any subscription queues with matching patterns
-	static void put_tag(std::string_view t) { publish(t, nullptr); }
+	__declspec(deprecated("put_tag used")) static void put_tag(std::string_view t) { publish(t, nullptr); }
 };
 
-// alias template for RMs data/tag pairs (tag is ALWAYS a std::string_view)
+// alias template for RMs data/tag pairs (tag is ALWAYS a std::string)
 template<typename T>
 using rms_pair = std::pair<T, std::string>;
 
@@ -590,9 +666,8 @@ public:
 	// get next typed DATA item in queue (blocking)
 	template<typename T>
 	T get() {
-		std::string tag;
 		T data{};
-		if (id)
+		if (std::string tag; id)
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetData);
 		return data;
 	}
@@ -600,24 +675,22 @@ public:
 	// N.B. - typically used in "logging" queue readers or RMs maintenance
 	template<>
 	rms_any get() {
-		std::string tag;
-		rms_any data;
-		if (id)
+		rms_any data{};
+		if (std::string tag; id)
 			((RMsQueue*)pg2xp(id))->Wait3(tag, data);
 		return data;
 	}
 	// get next TAG item in queue (blocking)
 	std::string get_tag() {
 		std::string tag;
-		int data;
-		if (id)
+		if (int data; id)
 			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetTag);
 		return tag;
 	}
 	// get next typed DATA item / TAG pair from queue (blocking)
 	template<typename T>
 	rms_pair<T> get_with_tag() {
-		rms_pair<T> rp;
+		rms_pair<T> rp{};
 		if (id)
 			((RMsQueue*)pg2xp(id))->Wait2(rp.second, rp.first, RMsGetTag | RMsGetData);
 		return rp;
@@ -626,7 +699,7 @@ public:
 	// N.B. - typically used in "logging" queue readers or RMs maintenance
 	template<>
 	rms_pair<rms_any> get_with_tag() {
-		rms_pair<rms_any> rp;
+		rms_pair<rms_any> rp{};
 		if (id)
 			((RMsQueue*)pg2xp(id))->Wait3(rp.second, rp.first);
 		return rp;
@@ -663,7 +736,7 @@ public:
 	// iterate and apply f to ALL typed DATA items in queue (blocking)
 	template<typename T, class UnaryFunction>
 	void for_each(UnaryFunction f) {
-		T data{};
+		T data;
 		while (data = get<T>(), !eod())
 			f(data);
 	}
@@ -681,6 +754,10 @@ public:
 		while (pair = get_with_tag<T>(), !eod())
 			f(pair);
 	}
+
+	// get a "record" of the requested types from queue (blocking)
+	/*template<typename ...T>
+	std::tuple<T...> get_rec() {}*/
 
 private:
 	std::atomic<int> id{ 0 };			// our subscription queue ID

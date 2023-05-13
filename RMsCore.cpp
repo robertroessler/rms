@@ -27,6 +27,8 @@
 	POSSIBILITY OF SUCH DAMAGE.
 */
 
+#pragma once
+
 #if defined(WIN32) || defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN		// Exclude rarely-used stuff from Windows headers
 #include <windows.h>
@@ -43,9 +45,13 @@
 #include <format>
 #include "rms.h"
 #include "rglob.h"
+#include <iostream>
 
+using namespace std::string_literals;
+using namespace std::string_view_literals;
 using namespace rms;
 
+using std::string;
 using std::string_view;
 
 char* rms::rmsB = nullptr;				// shared memory view pointer(s)
@@ -93,7 +99,7 @@ struct std::formatter<RMsType> : std::formatter<string_view> {
 		case RMsType::Int32: o += "Int32"; break;
 		case RMsType::Int64: o += "Int64"; break;
 		case RMsType::Ieee: o += "Ieee"; break;
-		case RMsType::Reserved: o += "Reserved"; break;
+		case RMsType::Record: o += "Record"; break;
 		default:
 			std::format_to(back_inserter(o), "Bytes[{}]", 2 << (int)ty);
 		}
@@ -324,7 +330,7 @@ int RMsRoot::AllocPage()
 rms_ptr_t RMsRoot::AllocRP(RMsType ty, size_t n)
 {
 	dumpRoot("AllocRP({}, {})...\n", ty, n);
-	rms_ptr_t rp = 0;
+	rms_ptr_t rp{};
 	if (ty == RMsType::Auto)
 		ty = n2ty(int(n));
 	std::lock_guard acquire(spin);
@@ -374,23 +380,22 @@ int RMsRoot::CheckQueue(int pg) //const
 /*
 	Add this tag/typed-data pair to any subscription queue that "matches" the tag.
 */
-void RMsRoot::Distribute(string_view tag, const void* data, size_t n, RMsType ty)
+template<rms_full_type T>
+void RMsRoot::Distribute(string_view tag, T d)
 {
 	std::lock_guard acquire(spin);
-	// check for cached tag->queue pairs...
-	auto tqp = matches.equal_range(tag);
-	if (tqp.first == tqp.second) {
-		// ... NO match, cache ALL queues which match this tag...
-		for (auto q = queueHead; q; q = ((RMsQueue*)pg2xp(q))->next)
-			if (((RMsQueue*)pg2xp(q))->Match(tag))
-				matches.insert(std::pair(tag, q));
-		// ... and re-compute the initial cache query
-		tqp = matches.equal_range(tag);
-	}
+	auto tqp = get_matches(tag);
 	// deliver to ALL cached tag->queue pairs which [now] match
 	for (auto i = tqp.first; i != tqp.second; ++i)
-		((RMsQueue*)pg2xp(i->second))->Append(tag, data, n, ty);
+		((RMsQueue*)pg2xp(i->second))->Append(tag, d);
 }
+
+// [explicitly] instantiate Distribute for ALL supported data types!
+template void RMsRoot::Distribute(string_view, rms_int32);
+template void RMsRoot::Distribute(string_view, rms_int64);
+template void RMsRoot::Distribute(string_view, rms_ieee);
+template void RMsRoot::Distribute(string_view, string_view);
+template void RMsRoot::Distribute(string_view, nullptr_t);
 
 /*
 	Free a page and make it available for re-use by adding at the front of the
@@ -427,6 +432,20 @@ void RMsRoot::FreeRP(rms_ptr_t rp)
 	std::lock_guard acquire(spin);
 	free_rp(rp);
 	dumpRoot("FreeRP({:08x})...DONE\n", rp);
+}
+
+auto RMsRoot::get_matches(std::string_view tag) -> decltype(matches.equal_range(tag))
+{
+	auto tqp = matches.equal_range(tag);
+	if (tqp.first == tqp.second) {
+		// ... NO match, cache ALL queues which match this tag...
+		for (auto q = queueHead; q; q = ((RMsQueue*)pg2xp(q))->next)
+			if (((RMsQueue*)pg2xp(q))->Match(tag))
+				matches.insert(std::pair(tag, q));
+		// ... and re-compute the initial cache query
+		tqp = matches.equal_range(tag);
+	}
+	return tqp;
 }
 
 /*
@@ -470,6 +489,21 @@ void RMsRoot::initTypedPageAsFree(int pg, RMsType ty)
 	dumpRoot("initTypedPageAsFree({},{})...{:08x}\n", pg, ty, typeFree[(int)ty]);
 }
 
+template<rms_full_type T>
+static constexpr void rmscpy(rms_ptr_t rp, T d) { *(T*)rp2xp(rp) = d; }
+template<>
+static void rmscpy(rms_ptr_t rp, std::string_view d) {
+	memcpy(rp2xp(rp), d.data(), d.size());
+}
+
+template<rms_full_type T>
+rms_ptr_t RMsRoot::Marshal(T d)
+{
+	const rms_ptr_t rp{ AllocRP(publisher::ty_of(d), publisher::n_of(d)) };
+	rmscpy(rp, d);
+	return rp;
+}
+
 /*
 	Remove the supplied page from the list of active [subscription] queues.
 */
@@ -477,7 +511,7 @@ void RMsRoot::RemoveQueue(int pg)
 {
 	dumpRoot("RemoveQueue({})...\n", pg);
 	std::lock_guard acquire(spin);
-	matches.clear();
+	std::erase_if(matches, [pg](const auto& tq) { return tq.second == pg; });
 	const auto prev = ((RMsQueue*)pg2xp(pg))->prev;
 	const auto next = ((RMsQueue*)pg2xp(pg))->next;
 	if (prev)
@@ -519,26 +553,25 @@ RMsQueue::~RMsQueue()
 	we settle for detecting when we shouldn't proceed further, and then don't.
 	N.B.2 - no need to acquire the mutex lock at THIS level of processing
 */
-void RMsQueue::Append(string_view tag, const void* data, size_t n, RMsType ty)
+template<rms_full_type T>
+void RMsQueue::Append(std::string_view tag, T d)
 {
-	dumpQueue("<{}>::Append('{}'...{})...\n", xp2pg(this), tag, ty);
-	if (state)
-		return;	// early out; "signaled"
-	const auto tN = tag.size();
-	// N.B. - limit tN to 1 <= tN <= 4096!
-	if (tN < 1 || tN > 4096)
-		return;	// we're OUTTA here!
-	const auto tRP = rmsRoot->AllocRP(RMsType::Auto, tN);
-	if (!tRP)
-		return;	// we're OUTTA here!
-	memcpy(rp2xp(tRP), tag.data(), tN);
-	rms_ptr_t dRP = 0;
-	if (n > 0) {
-		if (!(dRP = rmsRoot->AllocRP(ty, n)))
-			return rmsRoot->FreeRP(tRP);	// we're OUTTA here!
-		memcpy(rp2xp(dRP), data, n);
-	}
-	dumpQueue("<{}>::Append('{}'...{})...append()\n", xp2pg(this), tag, ty);
+	const auto tRP = rmsRoot->Marshal(tag);
+	rms_ptr_t dRP{};
+	if (publisher::n_of(d) > 0)
+		dRP = rmsRoot->Marshal(d);
+	append(tRP, dRP);
+}
+template<>
+void RMsQueue::Append(std::string_view tag, nullptr_t d)
+{
+	const auto tRP = rmsRoot->Marshal(tag);
+	append(tRP, 0);
+}
+
+void RMsQueue::Append(std::string_view tag, rms_ptr_t dRP)
+{
+	const auto tRP = rmsRoot->Marshal(tag);
 	append(tRP, dRP);
 }
 
@@ -645,13 +678,7 @@ bool RMsQueue::initialize(string_view pattern)
 		return false;	// we're OUTTA here!
 	rglob::compiler c;
 	c.compile(pattern);
-	const auto fsm = c.machine();
-	const auto n = fsm.size();
-	const auto rp = rmsRoot->AllocRP(RMsType::Auto, (int)n);
-	if (!rp)
-		return false;	// we're OUTTA here!
-	memcpy(rp2xp(rp), fsm.data(), n);
-	RMsQueue::pattern = rp;
+	RMsQueue::pattern = rmsRoot->Marshal(c.machine());
 	return true;	// indicate success
 }
 
@@ -661,7 +688,7 @@ bool RMsQueue::initialize(string_view pattern)
 */
 bool RMsQueue::Match(string_view tag) const
 {
-	const rglob::matcher m(string_view((const char*)rp2xp(pattern), rp2n(pattern)));
+	const rglob::matcher m({ (const char*)rp2xp(pattern), rp2n(pattern) });
 	return m.match(tag);
 }
 
