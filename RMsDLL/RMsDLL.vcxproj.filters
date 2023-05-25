@@ -23,5 +23,11 @@
     <ClInclude Include="..\rms.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\variant.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\scope_guard.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

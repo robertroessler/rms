@@ -45,7 +45,6 @@
 #include <format>
 #include "rms.h"
 #include "rglob.h"
-#include <iostream>
 
 using namespace std::string_literals;
 using namespace std::string_view_literals;
@@ -248,7 +247,7 @@ int RMsRoot::AddQueue(int pg)
 {
 	dumpRoot("AddQueue({})...\n", pg);
 	std::lock_guard acquire(spin);
-	matches.clear();
+	matches.clear(); // (cache will be rebuilt by subsequent message publishing)
 	((RMsQueue*)pg2xp(pg))->prev = queueTail;
 	((RMsQueue*)pg2xp(pg))->next = 0;
 	if (queueTail)
@@ -326,8 +325,10 @@ int RMsRoot::AllocPage()
 	   RMs type  3 = 1-16 B
 	   :
 	   RMs type 11 = 1-4 KiB
+	6. RMsRecord is a "hybrid" type, containing up
+	   to 16 "slots" of RMs ptrs in a 64 B object.
 */
-rms_ptr_t RMsRoot::AllocRP(RMsType ty, size_t n)
+rms_ptr_t RMsRoot::AllocRP(RMsType ty, size_t n, bool zero)
 {
 	dumpRoot("AllocRP({}, {})...\n", ty, n);
 	rms_ptr_t rp{};
@@ -337,8 +338,11 @@ rms_ptr_t RMsRoot::AllocRP(RMsType ty, size_t n)
 	if (!typeFree[(int)ty])
 		if (const auto pg = AllocPage(); pg)
 			initTypedPageAsFree(pg, ty);
-	if (typeFree[(int)ty])
+	if (typeFree[(int)ty]) {
 		rp = rp2rp(typeFree[(int)ty], int(n)), typeFree[(int)ty] = *(rms_ptr_t*)rp2xp(rp);
+		if (zero)
+			std::memset(rp2xp(rp), 0, 2u << ty2logM1(ty));
+	}
 	dumpRoot("AllocRP({}, {})...{:08x}\n", ty, n, rp);
 	return rp;
 }
@@ -390,7 +394,8 @@ void RMsRoot::Distribute(string_view tag, T d)
 		((RMsQueue*)pg2xp(i->second))->Append(tag, d);
 }
 
-// [explicitly] instantiate Distribute for ALL supported data types!
+// [explicitly] instantiate Distribute (and Append and Marshal)
+// for ALL supported data types!
 template void RMsRoot::Distribute(string_view, rms_int32);
 template void RMsRoot::Distribute(string_view, rms_int64);
 template void RMsRoot::Distribute(string_view, rms_ieee);
@@ -412,24 +417,34 @@ void RMsRoot::FreePage(int pg)
 /*
 	Free both RMs ptrs from a tag/data pair (data may be empty) by adding each
 	to front of their respective typed free lists.
+
+	N.B. - make sure to INDIVIDUALLY free RMs ptrs in active RECORD slots!
 */
 void RMsRoot::FreePair(td_pair_t p)
 {
 	dumpRoot("FreePair({:x}:{:x})...\n", p.tag, p.data);
 	std::lock_guard acquire(spin);
 	free_rp(p.tag);
-	if (p.data)
+	if (p.data) {
+		if (rp2ty(p.data) == RMsType::Record)
+			free_rec(p.data);
 		free_rp(p.data);
+	}
 	dumpRoot("FreePair({:x}:{:x})...DONE\n", p.tag, p.data);
 }
 
 /*
 	Free a single RMs ptr value by adding to front of typed free list.
+
+	N.B. - make sure to INDIVIDUALLY free RMs ptrs in active RECORD slots!
 */
 void RMsRoot::FreeRP(rms_ptr_t rp)
 {
 	dumpRoot("FreeRP({:08x})...\n", rp);
 	std::lock_guard acquire(spin);
+	// free USED "record" slots FIRST
+	if (rp2ty(rp) == RMsType::Record)
+		free_rec(rp);
 	free_rp(rp);
 	dumpRoot("FreeRP({:08x})...DONE\n", rp);
 }
@@ -490,12 +505,20 @@ void RMsRoot::initTypedPageAsFree(int pg, RMsType ty)
 }
 
 template<rms_full_type T>
-static constexpr void rmscpy(rms_ptr_t rp, T d) { *(T*)rp2xp(rp) = d; }
+static constexpr void rmscpy(rms_ptr_t rp, T d) {
+	*(T*)rp2xp(rp) = d;
+}
 template<>
 static void rmscpy(rms_ptr_t rp, std::string_view d) {
 	memcpy(rp2xp(rp), d.data(), d.size());
 }
 
+/*
+	Allocate a new RMs ptr of the specified type and copy the data.
+
+	Note that we will ONLY see values matching the concepts "rms_num_type"
+	or "rms_string_view"... NO nullptr_t values.
+*/
 template<rms_full_type T>
 rms_ptr_t RMsRoot::Marshal(T d)
 {
@@ -506,6 +529,8 @@ rms_ptr_t RMsRoot::Marshal(T d)
 
 /*
 	Remove the supplied page from the list of active [subscription] queues.
+
+	(Also removes any "matches" referencing this queue from the cache.)
 */
 void RMsRoot::RemoveQueue(int pg)
 {
@@ -562,6 +587,9 @@ void RMsQueue::Append(std::string_view tag, T d)
 		dRP = rmsRoot->Marshal(d);
 	append(tRP, dRP);
 }
+/*
+	Append [specialization] supporting publisher::put_tag.
+*/
 template<>
 void RMsQueue::Append(std::string_view tag, nullptr_t d)
 {
@@ -569,6 +597,11 @@ void RMsQueue::Append(std::string_view tag, nullptr_t d)
 	append(tRP, 0);
 }
 
+/*
+	Append [overload] supporting publication of RECORDs.
+
+	N.B. - the supplied "data" RMs ptr is already marshaled!
+*/
 void RMsQueue::Append(std::string_view tag, rms_ptr_t dRP)
 {
 	const auto tRP = rmsRoot->Marshal(tag);
@@ -643,13 +676,12 @@ int RMsQueue::Create(string_view pattern)
 {
 	dumpQueue("<?>::Create('{}')...\n", pattern);
 	if (const auto pg = rmsRoot->AllocPage(); pg) {
+		auto guard = sg::make_scope_guard([&]() -> void { rmsRoot->FreePage(pg); });
 		// use "placement" new!
 		auto qp = (RMsQueue*)pg2xp(pg);
 		new(qp) RMsQueue();
 		if (qp->initialize(pattern))
-			return rmsRoot->AddQueue(pg);
-		else
-			rmsRoot->FreePage(pg);
+			return guard.dismiss(), rmsRoot->AddQueue(pg);
 	}
 	return 0;	// we're OUTTA here!
 }
@@ -714,4 +746,109 @@ bool RMsQueue::Validate() const
 		}
 	// figure out more tests...
 	return true;	// indicate success
+}
+
+/*
+	Supports the older-style explicit "data and/or tag" -style get, which is
+	still used by some of the subscriber class get variants for simple vals.
+*/
+template<typename T>
+int RMsQueue::Wait2(string& tag, T& data, int flags) {
+	if (state)
+		return RMsStatusSignaled;	// early out; indicate "signaled"
+	semaphore.wait();
+	if (state)
+		return RMsStatusSignaled;	// early out; indicate "signaled"
+	const auto td = read < NQuick ?
+		quickE[read] :
+		((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
+	if (flags & RMsGetTag)
+		tag = std::move(getRValue<std::string>(td.tag));
+	if (flags & RMsGetData)
+		data = std::move(getRValue<T>(td.data));
+	// "consume" element
+	rmsRoot->FreePair(td);
+	std::lock_guard<RSpinLock> acquire(spin);
+	if (++read == write)
+		read = 0, write = 0; // reset to "quick" entries when we can
+	return flags;
+}
+
+// [explicitly] instantiate Wait2 for ALL supported data types!
+template int RMsQueue::Wait2(string&, rms_int32&, int);
+template int RMsQueue::Wait2(string&, rms_int64&, int);
+template int RMsQueue::Wait2(string&, rms_ieee&, int);
+template int RMsQueue::Wait2(string&, string&, int);
+
+/*
+	Supports the sometimes-convoluted accessing of queue elements as "rms_any"
+	variant values, which definitions are enabled by the use of  rva::variant.
+*/
+int RMsQueue::Wait3(string& tag, rms_any& data) {
+	if (state)
+		return RMsStatusSignaled;	// early out; indicate "signaled"
+	semaphore.wait();
+	if (state)
+		return RMsStatusSignaled;	// early out; indicate "signaled"
+	const auto td = read < NQuick ?
+		quickE[read] :
+		((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
+	switch (rp2ty(td.data)) {
+	case RMsType::Int32: data = getRValue<rms_int32>(td.data); break;
+	case RMsType::Int64: data = getRValue<rms_int64>(td.data); break;
+	case RMsType::Ieee: data = getRValue<rms_ieee>(td.data); break;
+	case RMsType::Record: {
+		data = rms_rec();
+		auto& vr = std::get<rms_rec>(data);
+		const auto rec = (rms_ptr_t*)rp2xp(td.data);
+		const auto n = rp2c(td.data);
+		vr.reserve(n);
+		for (auto i = 0; i < n; ++i)
+			switch (const auto v = rec[i]; rp2ty(v)) {
+			case RMsType::Int32: vr.emplace_back(getRValue<rms_int32>(v)); break;
+			case RMsType::Int64: vr.emplace_back(getRValue<rms_int64>(v)); break;
+			case RMsType::Ieee: vr.emplace_back(getRValue<rms_ieee>(v)); break;
+			// 2nd-level recursion ("record of record") DISALLOWED [for now]!
+			case RMsType::Record: vr.emplace_back(std::move(std::string())); break;
+			default:
+				vr.emplace_back(std::move(getRValue<std::string>(v))); break;
+			}
+		break;
+	}
+	default:
+		data = std::move(getRValue<std::string>(td.data)); break;
+	}
+	tag = std::move(getRValue<std::string>(td.tag));
+	// "consume" element
+	rmsRoot->FreePair(td);
+	std::lock_guard<RSpinLock> acquire(spin);
+	if (++read == write)
+		read = 0, write = 0; // reset to "quick" entries when we can
+	return 0;
+}
+
+/*
+	Supports the [new] RMs API for "records", which are simply collections of
+	the standard RMs "primitive" data types, implemented as a contiguous set
+	of packed "fields" in the RMs data store: the RMsType::Record.
+
+	N.B. - this returns an rms_ptr_t to these [still-packed] fields, which the
+	caller MUST pass to RMsRoot::FreeRP when it is done unpacking the values.
+*/
+rms_ptr_t RMsQueue::Wait4(string& tag) {
+	if (state)
+		return RMsStatusSignaled;	// early out; indicate "signaled"
+	semaphore.wait();
+	if (state)
+		return RMsStatusSignaled;	// early out; indicate "signaled"
+	const auto td = read < NQuick ?
+		quickE[read] :
+		((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
+	tag = std::move(getRValue<std::string>(td.tag));
+	// "consume" element (ONLY the tag just now, we are RETURNING the data)
+	rmsRoot->FreeRP(td.tag);
+	std::lock_guard<RSpinLock> acquire(spin);
+	if (++read == write)
+		read = 0, write = 0; // reset to "quick" entries when we can
+	return td.data; // return the RECORD RMs ptr, MUST BE FREED BY CALLER!
 }

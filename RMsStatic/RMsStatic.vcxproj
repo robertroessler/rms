@@ -205,6 +205,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\rms.h" />
+    <ClInclude Include="..\scope_guard.hpp" />
+    <ClInclude Include="..\variant.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\RGlob\RGlobStatic\RGlobStatic.vcxproj">
