@@ -70,22 +70,35 @@ using rms_intptr = std::intptr_t; // (this MUST resolve to either 'int' or 'long
 using rms_any = rva::variant<rms_int32, rms_int64, rms_ieee, std::string, std::vector<rva::self_t>>;
 using rms_rec = std::vector<rms_any>; // (use OUTSIDE of recursive definition)
 
+//	(allow "our" numbers)
 template<class T>
 concept rms_num_type =
 std::same_as<T, rms_int32> ||
 std::same_as<T, rms_int64> ||
 std::same_as<T, rms_ieee>;
 
+//	(allow "our" string_views and DISALLOW nullptrs)
 template<class T>
 concept rms_string_view =
 !std::same_as<T, nullptr_t> &&
 std::convertible_to<T, std::string_view>;
 
+//	(allow either "our" numbers or string_views)
 template<class T>
-concept rms_full_type =
+concept rms_mid_type =
 rms_num_type<T> ||
-std::same_as<T, std::nullptr_t> ||
 rms_string_view<T>;
+
+//	(allow "our" numbers, string_views, OR nullptrs)
+template<class T>
+concept rms_max_type =
+rms_mid_type<T> ||
+std::same_as<T, std::nullptr_t>;
+
+//	(allow OUTPUT - via get() et al - of "our" numbers or strings)
+template<class T>
+concept rms_out_type =
+rms_num_type<T> || std::same_as<T, std::string>;
 
 namespace rms {
 
@@ -137,10 +150,10 @@ extern int is_valid_queue(int id);
 #endif
 
 //	RMs ptr -> RMs type
-constexpr RMsType rp2ty(rms_ptr_t rp) { return (RMsType)((rp >> 12) & 0x0f); }
+constexpr RMsType rp2ty(rms_ptr_t rp) noexcept { return (RMsType)((rp >> 12) & 0x0f); }
 
 //	[byte] length -> RMs [string] type coding
-constexpr RMsType n2ty(int nn) {
+constexpr RMsType n2ty(int nn) noexcept {
 	auto i = 1;
 	for (; i < 11; ++i)
 		if ((unsigned)nn <= (2u << i))
@@ -149,7 +162,7 @@ constexpr RMsType n2ty(int nn) {
 }
 
 //	RMs type -> (binary logarithm of type's [max] length) - 1
-constexpr int ty2logM1(RMsType ty) {
+constexpr int ty2logM1(RMsType ty) noexcept {
 	// assert 0 <= ty <= 15
 	return
 		"\x0b"											// unk
@@ -161,33 +174,33 @@ constexpr int ty2logM1(RMsType ty) {
 }
 
 //	RMs ptr from page, RMs type, and page offset
-constexpr rms_ptr_t make_rp(int pg, RMsType ty, int po) { return (pg << 16) | ((int)ty << 12) | po; }
+constexpr rms_ptr_t make_rp(int pg, RMsType ty, int po) noexcept { return (pg << 16) | ((int)ty << 12) | po; }
 
 //	RMs ptr -> RMs ptr' with encoded data length nn
-constexpr rms_ptr_t rp2rp(rms_ptr_t rp, int nn) {
+constexpr rms_ptr_t rp2rp(rms_ptr_t rp, int nn) noexcept {
 	const auto pl2m1 = ty2logM1(rp2ty(rp)); // (pseudo "log2 - 1")
 	const auto max_n = 2u << pl2m1;
 	return (rp & ~(max_n - 1)) | (nn == max_n ? 0 : nn);
 }
 
 //	RMs ptr -> actual data length
-constexpr size_t rp2n(rms_ptr_t rp) {
+constexpr size_t rp2n(rms_ptr_t rp) noexcept {
 	const auto i = ty2logM1(rp2ty(rp));
 	const auto n = rp & ((2u << i) - 1);
 	return n ? n : (2u << i);
 }
 
 //	RMs ptr -> # of in-use RECORD slots
-constexpr size_t rp2c(rms_ptr_t rp) { return rp2n(rp) / sizeof rms_ptr_t; }
+constexpr size_t rp2c(rms_ptr_t rp) noexcept { return rp2n(rp) / sizeof rms_ptr_t; }
 
 //	exposed [H/W] ptr -> RMs page
-constexpr int xp2pg(void* xp) { return (int)((char*)xp - rmsB) >> 12; }
+constexpr int xp2pg(void* xp) noexcept { return (int)((char*)xp - rmsB) >> 12; }
 
 //	RMs page -> exposed [H/W] ptr
-constexpr void* pg2xp(int pg) { return rmsB + (ptrdiff_t(pg) << 12); }
+constexpr void* pg2xp(int pg) noexcept { return rmsB + (ptrdiff_t(pg) << 12); }
 
 //	RMs ptr -> exposed [H/W] ptr
-constexpr void* rp2xp(rms_ptr_t rp) {
+constexpr void* rp2xp(rms_ptr_t rp) noexcept {
 	const auto pg = rp >> 16;
 	const auto po = rp & (~((2 << ty2logM1(rp2ty(rp))) - 1) & 0x0fff);
 	return (char*)pg2xp(pg) + po;
@@ -264,6 +277,12 @@ public:
 		std::unique_lock lock(mt);
 		cv.wait(lock, [this]() { return count_ > 0; });
 	}
+	// "clear" or "reset" the semaphore
+	// N.B. - "wipes" previous signals, does NOT release waiting threads!
+	void reset() {
+		std::lock_guard lock(mt);
+		count_.store(0);
+	}
 
 private:
 	std::atomic<int> count_{ 0 };		// synch object
@@ -286,22 +305,19 @@ public:
 	RMsRoot() {}
 	~RMsRoot() {}
 
-	int AddQueue(int pg);
+	int AddQueue(int pg) noexcept;
 	int AllocPage();
-	rms_ptr_t AllocRP(RMsType ty, size_t n, bool zero = false);
-	int CheckAlloc(int pg) /*const*/;
-	int CheckQueue(int pg) /*const*/;
-	template<rms_full_type T>
-	void Distribute(std::string_view tag, T d);
-	void FreePage(int pg);
-	void FreePair(td_pair_t p);
-	void FreeRP(rms_ptr_t rp);
-	bool Initialize(int np);
-	template<rms_full_type T>
-	rms_ptr_t Marshal(T d);
-	template<>
-	rms_ptr_t Marshal(std::nullptr_t d) [[deprecated]] { return rms_ptr_t{}; /* "can't happen" */ }
-	void RemoveQueue(int pg);
+	rms_ptr_t AllocRP(RMsType ty, size_t n);
+	bool CheckAlloc(int pg) noexcept;
+	bool CheckQueue(int pg) noexcept;
+	void Distribute(std::string_view tag, rms_max_type auto d);
+	void FreePage(int pg) noexcept;
+	void FreePair(td_pair_t p) noexcept;
+	void FreeRP(rms_ptr_t rp) noexcept;
+	bool Initialize(size_t np) noexcept;
+	rms_ptr_t MakeRecord(size_t n);
+	rms_ptr_t Marshal(rms_mid_type auto d);
+	void RemoveQueue(int pg) noexcept;
 
 private:
 	friend class publisher;
@@ -309,20 +325,20 @@ private:
 
 	// Link RMs ptr at front of typed free list
 	// N.B. - Call with RMsRoot mutex LOCKED!
-	void constexpr free_rp(rms_ptr_t rp) {
+	void constexpr free_rp(rms_ptr_t rp) noexcept {
 		const auto ty = rp2ty(rp);
 		*(int*)rp2xp(rp) = typeFree[(int)ty], typeFree[(int)ty] = rp;
 	}
 	// INDIVIDUALLY free RMs ptrs in active RECORD slots
 	// N.B. - Call with RMsRoot mutex LOCKED!
-	void constexpr free_rec(rms_ptr_t rp) {
+	void constexpr free_rec(rms_ptr_t rp) noexcept {
 		const auto rec = (rms_ptr_t*)rp2xp(rp);
 		const auto n = rp2c(rp);
 		for (auto i = 0; i < n; ++i)
 			free_rp(rec[i]);
 	}
 	// N.B. - Call with RMsRoot mutex LOCKED!
-	void initTypedPageAsFree(int pg, RMsType ty);
+	void initTypedPageAsFree(int pg, RMsType ty) noexcept;
 
 	int magic{ RootMagic };				// root magic number ('RMsR')
 	RSpinLockEx spin;					// root [recursive] spinlock
@@ -359,7 +375,7 @@ class RMsQueue {
 	};
 
 	// construct and return the appropriate "rvalue" from RMs ptr
-	template<typename U>
+	template<rms_out_type U>
 	static inline constexpr U getRValue(rms_ptr_t rp) { return *(U*)rp2xp(rp); }
 	template<>
 	static inline constexpr std::string getRValue(rms_ptr_t rp) {
@@ -371,19 +387,20 @@ public:
 	RMsQueue() {}
 	~RMsQueue();
 
-	template<rms_full_type T>
-	void Append(std::string_view tag, T d);
-	template<>
+	void Append(std::string_view tag, rms_mid_type auto d);
 	void Append(std::string_view tag, nullptr_t d);
 	void Append(std::string_view tag, rms_ptr_t dRP);
-	bool Block() { return semaphore.block(), true; }
-	void Close();
-	void Flush();
+	bool Block() noexcept { return semaphore.block(), true; }
+	void Close() noexcept;
+	void Flush() noexcept;
 	bool Match(std::string_view tag) const;
-	int Peek() const { return write - read; }
-	void Signal(int flags);
-	bool Validate() const;
-	int State() const { return state; }
+	int Peek() const noexcept { return write - read; }
+	// Perform out - of - band "signaling" of our queue - typically used to set an
+	// "end of data" state when we want to shut down the queue, and let any readers
+	// know that no additional data will be forthcoming.
+	void Signal(int flags) noexcept { state |= flags, semaphore.signal(); }
+	bool Validate() const noexcept;
+	int State() const noexcept { return state; }
 
 	static int Create(std::string_view pattern);
 
@@ -399,7 +416,7 @@ private:
 		queue entries.
 
 		NQPage is the number of pages PER-QUEUE that can hold "published" but
-		not yet "consumed" queue entries - these needed to be allocated as/when
+		not yet "consumed" queue entries - these need to be allocated as/when
 		needed, but will not be returned to the RMsRoot-controlled page pool
 		until this queue is closed.
 
@@ -420,12 +437,12 @@ private:
 	constexpr int qp2pi(int p) const { return (p - NQuick) & 0x1ff; }
 
 	// ("generic" single-value wait)
-	template<typename T>
-	int Wait2(std::string& tag, T& data, int flags);
+	template<rms_out_type T>
+	int wait_T(std::string& tag, T& data, int flags);
 	// (specialized wait used ONLY for rms_any)
-	int Wait3(std::string& tag, rms_any& data);
+	int wait_any(std::string& tag, rms_any& data);
 	// (specialized wait used ONLY for records)
-	rms_ptr_t Wait4(std::string& tag);
+	rms_ptr_t wait_rec(std::string& tag);
 
 	std::atomic<int> magic{ QueueMagic };// our magic number ('RMsQ')
 	RSpinLock spin;						// our spinlock
@@ -437,13 +454,20 @@ private:
 	volatile int prev{ 0 }, next{ 0 };	// previous, next queues
 	td_pair_t quickE[NQuick]{};			// "quick" queue entries
 	unsigned short pageE[4]{};			// [pages of] queue entries (computed #)
+
+	static int NQPage;					// # of pages of RMsQueue "extras"
 };
 
 /*
 	Primary setup call for RMs messaging system, supplying the number of 4 KiB
 	pages to use for all control and data storage needs (maximum is 65,536).
 */
-void initialize(int np) noexcept(false);
+void initialize(int np);
+
+/*
+	Create a string representation of the supplied rms_any [recursive variant].
+*/
+std::string to_string(const rms_any& v);
 
 /*
 	Contains static "publish" methods for all supported data and tag types -
@@ -461,39 +485,36 @@ class publisher {
 
 	// return RMs "type" from associated C/C++ language type
 	template<typename T>
-	static constexpr auto ty_of(T v) { return RMsType::Auto; }
+	static constexpr auto ty_of(T v) noexcept { return RMsType::Auto; }
 	template<>
-	static constexpr auto ty_of(rms_int32 v) { return RMsType::Int32; }
+	static constexpr auto ty_of(rms_int32 v) noexcept { return RMsType::Int32; }
 	template<>
-	static constexpr auto ty_of(rms_int64 v) { return RMsType::Int64; }
+	static constexpr auto ty_of(rms_int64 v) noexcept { return RMsType::Int64; }
 	template<>
-	static constexpr auto ty_of(rms_ieee v) { return RMsType::Ieee; }
+	static constexpr auto ty_of(rms_ieee v) noexcept { return RMsType::Ieee; }
 	//rms_intptr already handled above as EITHER rms_int32 OR rms_int64
 
 	// (n_of() will NOT see a nullptr_t)
-	template<rms_full_type T>
-	static constexpr auto n_of(T v) { return sizeof v; }
-	template<>
-	static constexpr auto n_of(std::string_view v) { return v.size(); }
+	static constexpr auto n_of(rms_num_type auto v) noexcept { return sizeof v; }
 
-	template<rms_num_type T>
-	static constexpr auto coerce(T v) { return v; }
+	static constexpr auto n_of(std::string_view v) noexcept { return v.size(); }
 
-	static constexpr auto coerce(std::string_view v) { return v; }
+	static constexpr auto coerce(rms_num_type auto v) noexcept { return v; }
 
-	template<rms_num_type T>
-	static void publish(std::string_view t, T d) { rmsRoot->Distribute(t, d); }
+	static constexpr auto coerce(std::string_view v) noexcept { return v; }
+
+	static void publish(std::string_view t, rms_num_type auto d) { rmsRoot->Distribute(t, d); }
 
 	static void publish(std::string_view t, std::string_view d) { rmsRoot->Distribute(t, d); }
 
 	static void publish(std::string_view t, nullptr_t d) { rmsRoot->Distribute(t, nullptr); }
 
-	static constexpr void publish_rec(std::string_view t, const auto&& ...d) {
+	static constexpr void publish_rec(std::string_view t, rms_mid_type auto&& ...d) {
 		std::lock_guard acquire(rmsRoot->spin);
 		auto tqp = rmsRoot->get_matches(t);
 		// deliver to ALL cached tag->queue pairs which [now] match
 		for (auto i = tqp.first; i != tqp.second; ++i) {
-			const auto rec = rmsRoot->AllocRP(RMsType::Record, sizeof...(d) * sizeof rms_ptr_t, true);
+			const auto rec = rmsRoot->MakeRecord(sizeof...(d));
 			auto e = (rms_ptr_t*)rp2xp(rec);
 			((*e++ = rmsRoot->Marshal(d)), ...);
 			((RMsQueue*)pg2xp(i->second))->Append(t, rec);
@@ -502,21 +523,17 @@ class publisher {
 
 public:
 	// publish "tag/data pair" to any subscription queues with matching patterns
-	template<rms_num_type T>
-	static void put_with_tag(T d, std::string_view t) { publish(t, d); }
+	static void put_with_tag(rms_num_type auto d, std::string_view t) { publish(t, d); }
 
-	template<rms_string_view T>
-	static void put_with_tag(T d, std::string_view t) { publish(t, d); }
+	static void put_with_tag(rms_string_view auto d, std::string_view t) { publish(t, d); }
 
 	// publish "tag/data pair" to any subscription queues with matching patterns
-	template<rms_num_type T>
-	static void put(std::string_view t, T d) { publish(t, d); }
+	static void put(std::string_view t, rms_num_type auto d) { publish(t, d); }
 
-	template<rms_string_view T>
-	static void put(std::string_view t, T d) { publish(t, d); }
+	static void put(std::string_view t, rms_string_view auto d) { publish(t, d); }
 
-	// publish "tag/record pair" to any subscription queues with matching patterns
-	static void put_rec(std::string_view t, auto&& ...d) { publish_rec(t, coerce(d)...); }
+	// publish "tag/RECORD pair" to any subscription queues with matching patterns
+	static constexpr void put_rec(std::string_view t, rms_mid_type auto&& ...d) { publish_rec(t, coerce(d)...); }
 
 	// publish tag ONLY to any subscription queues with matching patterns
 	static void put_tag(std::string_view t) { publish(t, nullptr); }
@@ -598,71 +615,65 @@ public:
 	~subscription() { close(); }
 
 	// do NON-CONSUMING wait for message, returning queue validity (blocking)
-	auto block() { return id ? ((RMsQueue*)pg2xp(id))->Block() : false; }
+	constexpr auto block() noexcept { return id ? ((RMsQueue*)pg2xp(id))->Block() : false; }
 	// force shutdown of queue - usually better to leave to destructor
-	void close() {
+	void close() noexcept {
 		if (const auto id_ = id.exchange(0); id_)
 			((RMsQueue*)pg2xp(id_))->Close();
 	}
 	// return whether queue has reached "end of data"
-	bool eod() const { return id ? ((RMsQueue*)pg2xp(id))->State() != 0 : true; }
+	constexpr bool eod() const noexcept { return id ? ((RMsQueue*)pg2xp(id))->State() != 0 : true; }
 	// force discarding of all undelivered messages in queue
-	void flush() { if (id) ((RMsQueue*)pg2xp(id))->Flush(); }
+	void flush() noexcept { if (id) ((RMsQueue*)pg2xp(id))->Flush(); }
 	// return whether there is a message waiting (i.e., would a get* block?)
-	bool empty() const { return id ? ((RMsQueue*)pg2xp(id))->Peek() == 0 : true; }
+	constexpr bool empty() const noexcept { return id ? ((RMsQueue*)pg2xp(id))->Peek() == 0 : true; }
 	// compose "eod" and "empty" tests
-	bool eod_or_empty() const {
-		if (id) {
-			auto q = (RMsQueue*)pg2xp(id);
-			return q->State() != 0 || q->Peek() == 0;
-		}
-		return true;
-	}
+	constexpr bool eod_or_empty() const noexcept { return eod() || empty(); }
 	// send an OOB (out of band) signal to any waiting reader
-	void signal(int flags) { if (id) ((RMsQueue*)pg2xp(id))->Signal(flags); }
+	void signal(int flags) noexcept { if (id) ((RMsQueue*)pg2xp(id))->Signal(flags); }
 
 	// sign up to receive any published messages with tag matched by pattern
 	void subscribe(std::string_view pattern) { close(), id = RMsQueue::Create(pattern); }
 
 	// get next typed DATA item in queue (blocking)
 	template<typename T>
-	T get() {
+	constexpr T get() {
 		T data{};
 		if (std::string tag; id)
-			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetData);
+			((RMsQueue*)pg2xp(id))->wait_T(tag, data, RMsGetData);
 		return data;
 	}
 	// get next <any> DATA item from queue (blocking)
-	// N.B. - typically used in "logging" queue readers or RMs maintenance
+	// N.B. - typically used in "logging" queue readers or for "packed" RECORDs
 	template<>
 	rms_any get() {
 		rms_any data{};
 		if (std::string tag; id)
-			((RMsQueue*)pg2xp(id))->Wait3(tag, data);
+			((RMsQueue*)pg2xp(id))->wait_any(tag, data);
 		return data;
 	}
 	// get next TAG item in queue (blocking)
 	std::string get_tag() {
 		std::string tag;
 		if (int data; id)
-			((RMsQueue*)pg2xp(id))->Wait2(tag, data, RMsGetTag);
+			((RMsQueue*)pg2xp(id))->wait_T(tag, data, RMsGetTag);
 		return tag;
 	}
 	// get next typed DATA item / TAG pair from queue (blocking)
 	template<typename T>
-	rms_pair<T> get_with_tag() {
+	constexpr rms_pair<T> get_with_tag() {
 		rms_pair<T> rp{};
 		if (id)
-			((RMsQueue*)pg2xp(id))->Wait2(rp.second, rp.first, RMsGetTag | RMsGetData);
+			((RMsQueue*)pg2xp(id))->wait_T(rp.second, rp.first, RMsGetTag | RMsGetData);
 		return rp;
 	}
 	// get next <any> DATA item / tag pair from queue (blocking)
-	// N.B. - typically used in "logging" queue readers or RMs maintenance
+	// N.B. - typically used in "logging" queue readers or for "packed" RECORDs
 	template<>
 	rms_pair<rms_any> get_with_tag() {
 		rms_pair<rms_any> rp{};
 		if (id)
-			((RMsQueue*)pg2xp(id))->Wait3(rp.second, rp.first);
+			((RMsQueue*)pg2xp(id))->wait_any(rp.second, rp.first);
 		return rp;
 	}
 
@@ -678,8 +689,8 @@ public:
 	template<typename ...T>
 	constexpr std::tuple <T...> get_rec() {
 		if (std::string tag; id) {
-			const auto rec = ((RMsQueue*)pg2xp(id))->Wait4(tag);
-			auto guard = sg::make_scope_guard([&]() -> void { rmsRoot->FreeRP(rec); });
+			const auto rec = ((RMsQueue*)pg2xp(id))->wait_rec(tag);
+			auto guard = sg::make_scope_guard([rec]() noexcept -> void { rmsRoot->FreeRP(rec); });
 			auto e = (rms_ptr_t*)rp2xp(rec);
 			// (scope guard will free the RMs record AFTER unpacking is complete)
 			return { std::move(RMsQueue::getRValue<T>(*e++))... };
@@ -689,49 +700,49 @@ public:
 
 	// get next typed DATA item in queue (extraction operator >>)
 	template<typename T>
-	subscription& operator>>(T& data) { data = get<T>(); return *this; }
+	constexpr subscription& operator>>(T& data) { data = get<T>(); return *this; }
 	// get next TAG item in queue (extraction operator >=)
-	subscription& operator>=(std::string& tag) { tag = get_tag(); return *this; }
+	constexpr subscription& operator>=(std::string& tag) { tag = get_tag(); return *this; }
 	// get next typed DATA item / TAG pair from queue (extraction operator >>)
 	template<typename T>
-	subscription& operator>>(rms_pair<T>& p) { p = get_with_tag<T>(); return *this; }
+	constexpr subscription& operator>>(rms_pair<T>& p) { p = get_with_tag<T>(); return *this; }
 
 	// get next typed DATA item in queue IF POSSIBLE (non-blocking)
 	template<typename T>
-	bool try_get(T& data) { return !eod_or_empty() ? data = get<T>(), true : false; }
+	constexpr bool try_get(T& data) { return !eod_or_empty() ? data = get<T>(), true : false; }
 	// get next TAG item in queue IF POSSIBLE (non-blocking)
-	bool try_get_tag(std::string& tag) { return !eod_or_empty() ? tag = get_tag(), true : false; }
+	constexpr bool try_get_tag(std::string& tag) { return !eod_or_empty() ? tag = get_tag(), true : false; }
 	// get next typed DATA item / TAG pair from queue IF POSSIBLE (non-blocking)
 	template<typename T>
-	bool try_get_with_tag(rms_pair<T>& p) { return !eod_or_empty() ? p = get_with_tag<T>(), true : false; }
+	constexpr bool try_get_with_tag(rms_pair<T>& p) { return !eod_or_empty() ? p = get_with_tag<T>(), true : false; }
 
 	// get and apply f to FIRST typed DATA item in queue (blocking)
 	template<typename T, class UnaryFunction>
-	void for_first(UnaryFunction f) { if (T data = get<T>(); !eod()) f(data); }
+	constexpr void for_first(UnaryFunction f) { if (T data = get<T>(); !eod()) f(data); }
 	// get and apply f to FIRST TAG item in queue (blocking)
 	template<class UnaryFunction>
-	void for_first_tag(UnaryFunction f) { if (std::string tag = get_tag(); !eod()) f(tag); }
+	constexpr void for_first_tag(UnaryFunction f) { if (std::string tag = get_tag(); !eod()) f(tag); }
 	// get and apply f to FIRST typed DATA item / TAG pair in queue (blocking)
 	template<typename T, class UnaryFunction>
-	void for_first_with_tag(UnaryFunction f) { if (rms_pair<T> pair = get_with_tag<T>(); !eod()) f(pair); }
+	constexpr void for_first_with_tag(UnaryFunction f) { if (rms_pair<T> pair = get_with_tag<T>(); !eod()) f(pair); }
 
 	// iterate and apply f to ALL typed DATA items in queue (blocking)
 	template<typename T, class UnaryFunction>
-	void for_each(UnaryFunction f) {
+	constexpr void for_each(UnaryFunction f) {
 		T data;
 		while (data = get<T>(), !eod())
 			f(data);
 	}
 	// iterate and apply f to ALL TAG items in queue (blocking)
 	template<class UnaryFunction>
-	void for_each_tag(UnaryFunction f) {
+	constexpr void for_each_tag(UnaryFunction f) {
 		std::string tag;
 		while (tag = get_tag(), !eod())
 			f(tag);
 	}
 	// iterate and apply f to ALL typed DATA item / TAG pairs in queue (blocking)
 	template<typename T, class UnaryFunction>
-	void for_each_with_tag(UnaryFunction f) {
+	constexpr void for_each_with_tag(UnaryFunction f) {
 		rms_pair<T> pair;
 		while (pair = get_with_tag<T>(), !eod())
 			f(pair);
