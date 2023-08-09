@@ -648,9 +648,7 @@ void RMsQueue::Flush() noexcept
 {
 	std::lock_guard acquire(spin);
 	while (read < write)
-		rmsRoot->FreePair(read < NQuick ?
-			quickE[read] :
-			((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)]), ++read;
+		rmsRoot->FreePair(next_pair()), ++read;
 	read = 0, write = 0, state.store(0);
 	semaphore.reset(); // (IMPORTANT in case we use this queue again!)
 }
@@ -693,19 +691,15 @@ bool RMsQueue::Validate() const noexcept
 	still used by some of the subscriber class get variants for simple vals.
 */
 template<rms_out_type T>
-int RMsQueue::wait_T(string& tag, T& data, int flags) {
-	if (state)
+int RMsQueue::wait_T(string& tag, T& data, int flags, std::stop_token* st)
+{
+	if (check_state_wait_state_stop(st))
 		return RMsStatusSignaled;	// early out; indicate "signaled"
-	semaphore.wait();
-	if (state)
-		return RMsStatusSignaled;	// early out; indicate "signaled"
-	const auto td = read < NQuick ?
-		quickE[read] :
-		((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
+	const auto td = next_pair();
 	if (flags & RMsGetTag)
-		tag = std::move(getRValue<string>(td.tag));
+		tag = getRValue<string>(td.tag);
 	if (flags & RMsGetData)
-		data = std::move(getRValue<T>(td.data));
+		data = getRValue<T>(td.data);
 	// "consume" element
 	rmsRoot->FreePair(td);
 	std::lock_guard<RSpinLock> acquire(spin);
@@ -715,24 +709,20 @@ int RMsQueue::wait_T(string& tag, T& data, int flags) {
 }
 
 // [explicitly] instantiate wait_T for ALL supported data types!
-template int RMsQueue::wait_T(string&, rms_int32&, int);
-template int RMsQueue::wait_T(string&, rms_int64&, int);
-template int RMsQueue::wait_T(string&, rms_ieee&, int);
-template int RMsQueue::wait_T(string&, string&, int);
+template int RMsQueue::wait_T(string&, rms_int32&, int, std::stop_token*);
+template int RMsQueue::wait_T(string&, rms_int64&, int, std::stop_token*);
+template int RMsQueue::wait_T(string&, rms_ieee&, int, std::stop_token*);
+template int RMsQueue::wait_T(string&, string&, int, std::stop_token*);
 
 /*
 	Supports the sometimes-convoluted accessing of queue elements as "rms_any"
 	variant values, which definitions are enabled by the use of  rva::variant.
 */
-int RMsQueue::wait_any(string& tag, rms_any& data) {
-	if (state)
+int RMsQueue::wait_any(string& tag, rms_any& data, std::stop_token* st)
+{
+	if (check_state_wait_state_stop(st))
 		return RMsStatusSignaled;	// early out; indicate "signaled"
-	semaphore.wait();
-	if (state)
-		return RMsStatusSignaled;	// early out; indicate "signaled"
-	const auto td = read < NQuick ?
-		quickE[read] :
-		((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
+	const auto td = next_pair();
 	switch (rp2ty(td.data)) {
 	case RMsType::Int32: data = getRValue<rms_int32>(td.data); break;
 	case RMsType::Int64: data = getRValue<rms_int64>(td.data); break;
@@ -749,16 +739,16 @@ int RMsQueue::wait_any(string& tag, rms_any& data) {
 			case RMsType::Int64: vr.emplace_back(getRValue<rms_int64>(v)); break;
 			case RMsType::Ieee: vr.emplace_back(getRValue<rms_ieee>(v)); break;
 			// 2nd-level recursion ("record of record") DISALLOWED [for now]!
-			case RMsType::Record: vr.emplace_back(std::move(string())); break;
+			case RMsType::Record: vr.emplace_back(string()); break;
 			default:
-				vr.emplace_back(std::move(getRValue<string>(v))); break;
+				vr.emplace_back(getRValue<string>(v)); break;
 			}
 		break;
 	}
 	default:
-		data = std::move(getRValue<string>(td.data)); break;
+		data = getRValue<string>(td.data); break;
 	}
-	tag = std::move(getRValue<string>(td.tag));
+	tag = getRValue<string>(td.tag);
 	// "consume" element
 	rmsRoot->FreePair(td);
 	std::lock_guard<RSpinLock> acquire(spin);
@@ -775,16 +765,12 @@ int RMsQueue::wait_any(string& tag, rms_any& data) {
 	N.B. - this returns an rms_ptr_t to these [still-packed] fields, which the
 	caller MUST pass to RMsRoot::FreeRP when it is done unpacking the values.
 */
-rms_ptr_t RMsQueue::wait_rec(string& tag) {
-	if (state)
+rms_ptr_t RMsQueue::wait_rec(string& tag, std::stop_token* st)
+{
+	if (check_state_wait_state_stop(st))
 		return RMsStatusSignaled;	// early out; indicate "signaled"
-	semaphore.wait();
-	if (state)
-		return RMsStatusSignaled;	// early out; indicate "signaled"
-	const auto td = read < NQuick ?
-		quickE[read] :
-		((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
-	tag = std::move(getRValue<string>(td.tag));
+	const auto td = next_pair();
+	tag = getRValue<string>(td.tag);
 	// "consume" element (ONLY the tag just now, we are RETURNING the data)
 	rmsRoot->FreeRP(td.tag);
 	std::lock_guard<RSpinLock> acquire(spin);

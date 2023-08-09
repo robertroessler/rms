@@ -19,9 +19,11 @@ int main(int argc, char* argv[]) {
 	publisher::put_tag("xyz");
 	publisher::put("xy", "snarf");
 //	publisher::put("xyz", nullptr); // INVALID @ compile-time
+	publisher::put("xyz", string()); // (OK - same result, put_tag is preferred)
 	publisher::put("xyz", 0);
 	publisher::put("xyz", 0.0);
 //	publisher::put("xyz", 0ull); // INVALID @ compile-time
+	publisher::put("xyz", rms_int64(0ull)); // (OK)
 	s.flush();
 //	publisher::put_rec("x", 0, 0ll, 0.0, "abc", "def"s, nullptr); // INVALID...
 	publisher::put_rec("x", 0, 0xdeadbeefll, 123456789.0e-42, "abc", "def"s);

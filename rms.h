@@ -271,11 +271,12 @@ public:
 		cv.wait(lock, [this]() { return count_ > 0; });
 		--count_;
 	}
-	// EXPERIMENTAL: "non-consuming" wait
-	// N.B. - ONLY meaningful in "single-consumer" (per semaphore) model!
-	void block() {
+	// as of c++20, we can use the "std::stop_token" wait form... so
+	// std::condition_variable => std::condition_variable_any to support this
+	void wait(std::stop_token st) {
 		std::unique_lock lock(mt);
-		cv.wait(lock, [this]() { return count_ > 0; });
+		if (cv.wait(lock, st, [this]() { return count_ > 0; }))
+			--count_;
 	}
 	// "clear" or "reset" the semaphore
 	// N.B. - "wipes" previous signals, does NOT release waiting threads!
@@ -286,7 +287,7 @@ public:
 
 private:
 	std::atomic<int> count_{ 0 };		// synch object
-	std::condition_variable cv;			// condition variable
+	std::condition_variable_any cv;		// condition variable
 	std::mutex mt;						// mutex for above
 };
 
@@ -390,11 +391,10 @@ public:
 	void Append(std::string_view tag, rms_mid_type auto d);
 	void Append(std::string_view tag, nullptr_t d);
 	void Append(std::string_view tag, rms_ptr_t dRP);
-	bool Block() noexcept { return semaphore.block(), true; }
 	void Close() noexcept;
 	void Flush() noexcept;
 	bool Match(std::string_view tag) const;
-	int Peek() const noexcept { return write - read; }
+	constexpr int Peek() const noexcept { return write - read; }
 	// Perform out - of - band "signaling" of our queue - typically used to set an
 	// "end of data" state when we want to shut down the queue, and let any readers
 	// know that no additional data will be forthcoming.
@@ -432,17 +432,33 @@ private:
 	std::tuple<bool, int, int> checkWrite();
 	bool initialize(std::string_view pattern);
 	// RMs queue read/write pointer -> queue indirect page #
-	constexpr int qp2pq(int p) const { return (p - NQuick) >> 9; }
+	constexpr int qp2pq(int p) const noexcept { return (p - NQuick) >> 9; }
 	// RMs queue read/write pointer -> queue indirect page index
-	constexpr int qp2pi(int p) const { return (p - NQuick) & 0x1ff; }
+	constexpr int qp2pi(int p) const noexcept { return (p - NQuick) & 0x1ff; }
+	// boilerplate code used by all "wait_*" fns
+	auto check_state_wait_state_stop(std::stop_token* st) noexcept {
+		if (state != 0)
+			return true;
+		else if (st != nullptr)
+			semaphore.wait(*st);
+		else
+			semaphore.wait();
+		return state != 0 || (st != nullptr && st->stop_requested());
+	}
+	// more boilerplate, used whenever queue PAIRs are pulled off and returned
+	constexpr auto next_pair() const noexcept {
+		return read < NQuick ?
+			quickE[read] :
+			((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
+	}
 
 	// ("generic" single-value wait)
 	template<rms_out_type T>
-	int wait_T(std::string& tag, T& data, int flags);
+	int wait_T(std::string& tag, T& data, int flags, std::stop_token* st = nullptr);
 	// (specialized wait used ONLY for rms_any)
-	int wait_any(std::string& tag, rms_any& data);
+	int wait_any(std::string& tag, rms_any& data, std::stop_token* st = nullptr);
 	// (specialized wait used ONLY for records)
-	rms_ptr_t wait_rec(std::string& tag);
+	rms_ptr_t wait_rec(std::string& tag, std::stop_token* st = nullptr);
 
 	std::atomic<int> magic{ QueueMagic };// our magic number ('RMsQ')
 	RSpinLock spin;						// our spinlock
@@ -614,8 +630,6 @@ public:
 	subscription(std::string_view pattern) { subscribe(pattern); }
 	~subscription() { close(); }
 
-	// do NON-CONSUMING wait for message, returning queue validity (blocking)
-	constexpr auto block() noexcept { return id ? ((RMsQueue*)pg2xp(id))->Block() : false; }
 	// force shutdown of queue - usually better to leave to destructor
 	void close() noexcept {
 		if (const auto id_ = id.exchange(0); id_)
@@ -625,55 +639,60 @@ public:
 	constexpr bool eod() const noexcept { return id ? ((RMsQueue*)pg2xp(id))->State() != 0 : true; }
 	// force discarding of all undelivered messages in queue
 	void flush() noexcept { if (id) ((RMsQueue*)pg2xp(id))->Flush(); }
+	// expose the actual *count* present in the underlying queue object
+	constexpr auto peek() const noexcept { return id ? ((RMsQueue*)pg2xp(id))->Peek() : 0; }
 	// return whether there is a message waiting (i.e., would a get* block?)
-	constexpr bool empty() const noexcept { return id ? ((RMsQueue*)pg2xp(id))->Peek() == 0 : true; }
+	constexpr auto empty() const noexcept { return peek() == 0; }
 	// compose "eod" and "empty" tests
 	constexpr bool eod_or_empty() const noexcept { return eod() || empty(); }
 	// send an OOB (out of band) signal to any waiting reader
 	void signal(int flags) noexcept { if (id) ((RMsQueue*)pg2xp(id))->Signal(flags); }
+	// EXPERIMENTAL: append data DIRECTLY to queue, bypassing usual publication
+	// N.B. - useful for maintenance / "Quis custodiet ipsos custodes?" problem
+	void push_back(std::string_view t, std::string_view d) { if (id) ((RMsQueue*)pg2xp(id))->Append(t, d); }
 
 	// sign up to receive any published messages with tag matched by pattern
 	void subscribe(std::string_view pattern) { close(), id = RMsQueue::Create(pattern); }
 
 	// get next typed DATA item in queue (blocking)
 	template<typename T>
-	constexpr T get() {
+	constexpr T get(std::stop_token* st = nullptr) {
 		T data{};
 		if (std::string tag; id)
-			((RMsQueue*)pg2xp(id))->wait_T(tag, data, RMsGetData);
+			((RMsQueue*)pg2xp(id))->wait_T(tag, data, RMsGetData, st);
 		return data;
 	}
 	// get next <any> DATA item from queue (blocking)
 	// N.B. - typically used in "logging" queue readers or for "packed" RECORDs
 	template<>
-	rms_any get() {
+	rms_any get(std::stop_token* st) {
 		rms_any data{};
 		if (std::string tag; id)
-			((RMsQueue*)pg2xp(id))->wait_any(tag, data);
+			((RMsQueue*)pg2xp(id))->wait_any(tag, data, st);
 		return data;
 	}
 	// get next TAG item in queue (blocking)
-	std::string get_tag() {
+	std::string get_tag(std::stop_token* st = nullptr) {
 		std::string tag;
 		if (int data; id)
-			((RMsQueue*)pg2xp(id))->wait_T(tag, data, RMsGetTag);
+			((RMsQueue*)pg2xp(id))->wait_T(tag, data, RMsGetTag, st);
 		return tag;
 	}
 	// get next typed DATA item / TAG pair from queue (blocking)
 	template<typename T>
-	constexpr rms_pair<T> get_with_tag() {
+	constexpr rms_pair<T> get_with_tag(std::stop_token* st = nullptr) {
 		rms_pair<T> rp{};
 		if (id)
-			((RMsQueue*)pg2xp(id))->wait_T(rp.second, rp.first, RMsGetTag | RMsGetData);
+			((RMsQueue*)pg2xp(id))->wait_T(rp.second, rp.first, RMsGetTag | RMsGetData, st);
 		return rp;
 	}
 	// get next <any> DATA item / tag pair from queue (blocking)
 	// N.B. - typically used in "logging" queue readers or for "packed" RECORDs
 	template<>
-	rms_pair<rms_any> get_with_tag() {
+	rms_pair<rms_any> get_with_tag(std::stop_token* st) {
 		rms_pair<rms_any> rp{};
 		if (id)
-			((RMsQueue*)pg2xp(id))->wait_any(rp.second, rp.first);
+			((RMsQueue*)pg2xp(id))->wait_any(rp.second, rp.first, st);
 		return rp;
 	}
 
@@ -687,15 +706,22 @@ public:
 		https://github.com/ricab/scope_guard
 	*/
 	template<typename ...T>
-	constexpr std::tuple <T...> get_rec() {
+	constexpr std::tuple <T...> get_rec(std::stop_token* st = nullptr) {
 		if (std::string tag; id) {
-			const auto rec = ((RMsQueue*)pg2xp(id))->wait_rec(tag);
+			const auto rec = ((RMsQueue*)pg2xp(id))->wait_rec(tag, st);
 			auto guard = sg::make_scope_guard([rec]() noexcept -> void { rmsRoot->FreeRP(rec); });
 			auto e = (rms_ptr_t*)rp2xp(rec);
 			// (scope guard will free the RMs record AFTER unpacking is complete)
-			return { std::move(RMsQueue::getRValue<T>(*e++))... };
+			return { RMsQueue::getRValue<T>(*e++)... };
 		}
 		return {}; // (error case: queue isn't open)
+	}
+
+	// utility fn to "explode" an rms_rec (vec of rms_any values) into a tuple
+	template<typename ...T>
+	constexpr std::tuple <T...> unpack_rec(const rms_rec& rec) {
+		auto e = rec.cbegin();
+		return { std::get<T>(*e++)... };
 	}
 
 	// get next typed DATA item in queue (extraction operator >>)
@@ -728,23 +754,54 @@ public:
 
 	// iterate and apply f to ALL typed DATA items in queue (blocking)
 	template<typename T, class UnaryFunction>
-	constexpr void for_each(UnaryFunction f) {
+	constexpr void for_each(UnaryFunction f, std::stop_token* st = nullptr) {
+		auto stop_requested = [](auto st) {
+			if (st != nullptr)
+				return st->stop_requested();
+			else
+				return false;
+		};
 		T data;
-		while (data = get<T>(), !eod())
+		while (data = get<T>(st), !stop_requested(st) && !eod())
 			f(data);
+	}
+	// iterate and apply f to ALL RECORD DATA items in queue (blocking)
+	template<class UnaryFunction>
+	constexpr void for_each_rec(UnaryFunction f, std::stop_token* st = nullptr) {
+		auto stop_requested = [](auto st) {
+			if (st != nullptr)
+				return st->stop_requested();
+			else
+				return false;
+		};
+		rms_any data{};
+		while (data = get<rms_any>(st), !stop_requested(st) && !eod())
+			f(std::get<rms_rec>(data));
 	}
 	// iterate and apply f to ALL TAG items in queue (blocking)
 	template<class UnaryFunction>
-	constexpr void for_each_tag(UnaryFunction f) {
+	constexpr void for_each_tag(UnaryFunction f, std::stop_token* st = nullptr) {
+		auto stop_requested = [](auto st) {
+			if (st != nullptr)
+				return st->stop_requested();
+			else
+				return false;
+		};
 		std::string tag;
-		while (tag = get_tag(), !eod())
+		while (tag = get_tag(st), !stop_requested(st) && !eod())
 			f(tag);
 	}
 	// iterate and apply f to ALL typed DATA item / TAG pairs in queue (blocking)
 	template<typename T, class UnaryFunction>
-	constexpr void for_each_with_tag(UnaryFunction f) {
+	constexpr void for_each_with_tag(UnaryFunction f, std::stop_token* st = nullptr) {
+		auto stop_requested = [](auto st) {
+			if (st != nullptr)
+				return st->stop_requested();
+			else
+				return false;
+		};
 		rms_pair<T> pair;
-		while (pair = get_with_tag<T>(), !eod())
+		while (pair = get_with_tag<T>(st), !stop_requested(st) && !eod())
 			f(pair);
 	}
 
