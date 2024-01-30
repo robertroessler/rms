@@ -1,7 +1,7 @@
 /*
 	rms.h - interface of the RMs messaging system
 
-	Copyright(c) 2004-2023, Robert Roessler
+	Copyright(c) 2004-2024, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -70,12 +70,19 @@ using rms_intptr = std::intptr_t; // (this MUST resolve to either 'int' or 'long
 using rms_any = rva::variant<rms_int32, rms_int64, rms_ieee, std::string, std::vector<rva::self_t>>;
 using rms_rec = std::vector<rms_any>; // (use OUTSIDE of recursive definition)
 
+//	(allow "our" enums, i.e., based on underlying rms_int32, as well as bools)
+template<class T>
+concept rms_int_like =
+(std::is_enum_v<T> &&
+std::same_as<std::underlying_type_t<T>, rms_int32>) ||
+std::same_as<T, bool>;
+
 //	(allow "our" numbers)
 template<class T>
 concept rms_num_type =
-std::same_as<T, rms_int32> ||
-std::same_as<T, rms_int64> ||
-std::same_as<T, rms_ieee>;
+std::same_as<T, rms_ieee> || rms_int_like<T> ||
+(std::is_integral_v<T> && std::same_as<std::make_signed_t<T>, rms_int32>) ||
+(std::is_integral_v<T> && std::same_as<std::make_signed_t<T>, rms_int64>);
 
 //	(allow "our" string_views and DISALLOW nullptrs)
 template<class T>
@@ -208,26 +215,28 @@ constexpr void* rp2xp(rms_ptr_t rp) noexcept {
 
 //	Simple spinlock class
 class RSpinLock {
+	std::atomic_flag lock_{};
+
 public:
-	void lock() {
+	bool test() const noexcept { return lock_.test(); }
+	void lock() noexcept {
 		// try simple lock...
 		while (lock_.test_and_set(std::memory_order_acquire))
 			// ... nope, release time slice and keep trying
 			std::this_thread::yield();
 	}
-	void unlock() { lock_.clear(std::memory_order_release); }
-
-private:
-	std::atomic_flag lock_ ATOMIC_FLAG_INIT;
+	void unlock() noexcept { lock_.clear(std::memory_order_release); }
 };
 
 //	Recursive spinlock class
 class RSpinLockEx {
-public:
-	RSpinLockEx() : nobody{}, owner{ nobody } {}
+	static constexpr std::thread::id nobody{};
 
-	void lock() {
-		auto current = std::this_thread::get_id();
+public:
+	RSpinLockEx() : owner{ nobody } {}
+
+	void lock() noexcept {
+		const auto current = std::this_thread::get_id();
 		auto id = nobody;
 		// try simple lock (for current thread)...
 		if (owner != current && !owner.compare_exchange_strong(id, current))
@@ -238,14 +247,13 @@ public:
 		// ... we HAVE the lock, increment our "recursion" count
 		++count_;
 	}
-	void unlock() {
+	void unlock() noexcept {
 		// with thread's final "unlock", show owner as "no thread"
 		if (--count_ == 0)
 			owner.store(nobody, std::memory_order_release);
 	}
 
 private:
-	const std::thread::id nobody;		// value matching NO thread
 	std::atomic<std::thread::id> owner;	// thread ID of lock holder (synch object)
 	int count_{ 0 };					// # of [recursive] locks held
 };
@@ -254,41 +262,39 @@ private:
 class RSemaphore {
 public:
 	RSemaphore() {}
-	~RSemaphore() {
-		count_ = 0;
-		cv.notify_all();
-	}
+	~RSemaphore() { reset(); }
 
-	void signal(int n = 1) {
+	void signal(int n = 1) noexcept {
 		{
 			std::lock_guard lock(mt);
 			count_ += n;
 		}
 		cv.notify_one();
 	}
-	void wait() {
+	// N.B. - NullaryFn should be used to take the newly-available resource
+	template<class NullaryFn>
+	void wait(NullaryFn f = []() {}) {
 		std::unique_lock lock(mt);
 		cv.wait(lock, [this]() { return count_ > 0; });
-		--count_;
+		--count_, f();
 	}
 	// as of c++20, we can use the "std::stop_token" wait form... so
 	// std::condition_variable => std::condition_variable_any to support this
-	void wait(std::stop_token st) {
+	// N.B. - NullaryFn should be used to take the newly-available resource
+	template<class NullaryFn>
+	void wait(std::stop_token st, NullaryFn f = []() {}) {
 		std::unique_lock lock(mt);
 		if (cv.wait(lock, st, [this]() { return count_ > 0; }))
-			--count_;
+			--count_, f();
 	}
 	// "clear" or "reset" the semaphore
 	// N.B. - "wipes" previous signals, does NOT release waiting threads!
-	void reset() {
-		std::lock_guard lock(mt);
-		count_.store(0);
-	}
+	void reset() noexcept { count_ = 0; }
 
 private:
-	std::atomic<int> count_{ 0 };		// synch object
+	int count_{ 0 };					// synch object
 	std::condition_variable_any cv;		// condition variable
-	std::mutex mt;						// mutex for above
+	RSpinLock mt;						// mutex for above
 };
 
 /*
@@ -394,6 +400,7 @@ public:
 	void Close() noexcept;
 	void Flush() noexcept;
 	bool Match(std::string_view tag) const;
+	// N.B. - DIRECTLY returns a [possibly negative] difference, use abs as needed
 	constexpr int Peek() const noexcept { return write - read; }
 	// Perform out - of - band "signaling" of our queue - typically used to set an
 	// "end of data" state when we want to shut down the queue, and let any readers
@@ -436,22 +443,32 @@ private:
 	// RMs queue read/write pointer -> queue indirect page index
 	constexpr int qp2pi(int p) const noexcept { return (p - NQuick) & 0x1ff; }
 	// boilerplate code used by all "wait_*" fns
-	auto check_state_wait_state_stop(std::stop_token* st) noexcept {
+	// N.B. - executes "take resource" fn while still under semaphore lock!
+	template<class TakeResource>
+	auto check_early_exit_and_wait(std::stop_token* st, TakeResource f) noexcept {
 		if (state != 0)
 			return true;
 		else if (st != nullptr)
-			semaphore.wait(*st);
+			semaphore.wait(*st, f);
 		else
-			semaphore.wait();
+			semaphore.wait(f);
 		return state != 0 || (st != nullptr && st->stop_requested());
 	}
 	// more boilerplate, used whenever queue PAIRs are pulled off and returned
+	// N.B. - Call with [our] RMsQueue mutex LOCKED!
 	constexpr auto next_pair() const noexcept {
 		return read < NQuick ?
 			quickE[read] :
 			((pq_pag_t*)pg2xp(pageE[qp2pq(read)]))->pqTD[qp2pi(read)];
 	}
-
+	// still more boilerplate, take next pair AND tidy up [under lock]
+	auto get_next_pair_and_remove() noexcept {
+		std::lock_guard acquire(spin);
+		const auto td = next_pair();
+		if (++read == write)
+			read = 0, write = 0; // reset to "quick" entries when we can
+		return td;
+	}
 	// ("generic" single-value wait)
 	template<rms_out_type T>
 	int wait_T(std::string& tag, T& data, int flags, std::stop_token* st = nullptr);
@@ -515,11 +532,21 @@ class publisher {
 
 	static constexpr auto n_of(std::string_view v) noexcept { return v.size(); }
 
-	static constexpr auto coerce(rms_num_type auto v) noexcept { return v; }
+	// (make SURE any marshaling will store enums / bools as rms_int32 values)
+	static constexpr auto coerce(rms_int_like auto v) noexcept { return (rms_int32)v; }
+
+	// (make SURE any marshaling will store integrals as rms_int32/rms_int64!)
+	static constexpr auto coerce(rms_num_type auto v) noexcept {
+		using t = decltype(v);
+		if constexpr (std::same_as<t, rms_ieee>)
+			return v;
+		else
+			return (std::make_signed_t<t>)v;
+	}
 
 	static constexpr auto coerce(std::string_view v) noexcept { return v; }
 
-	static void publish(std::string_view t, rms_num_type auto d) { rmsRoot->Distribute(t, d); }
+	static void publish(std::string_view t, rms_num_type auto d) { rmsRoot->Distribute(t, coerce(d)); }
 
 	static void publish(std::string_view t, std::string_view d) { rmsRoot->Distribute(t, d); }
 
@@ -549,7 +576,7 @@ public:
 	static void put(std::string_view t, rms_string_view auto d) { publish(t, d); }
 
 	// publish "tag/RECORD pair" to any subscription queues with matching patterns
-	static constexpr void put_rec(std::string_view t, rms_mid_type auto&& ...d) { publish_rec(t, coerce(d)...); }
+	static constexpr void put_rec(std::string_view t, rms_mid_type auto ...d) { publish_rec(t, coerce(d)...); }
 
 	// publish tag ONLY to any subscription queues with matching patterns
 	static void put_tag(std::string_view t) { publish(t, nullptr); }
@@ -599,6 +626,23 @@ using rms_pair = std::pair<T, std::string>;
 	to the subscription queue, first testing for "empty" and/or "end-of-data" on
 	the queue, and then only returning data if it is available AND valid.
 
+	* NEW for v3.0: to deal with the ugly issue of *potentially* asynchronous
+	interleaving of the multiple "fields" in a logical "record", RMs has added...
+	records!
+
+	In addition to safe ("atomic") grouping of the fields in a record, RMs now
+	also lets you "have it your way": in addition to the usual RMs primitive types,
+	when publishing a record [to a subscription queue], you can also use bools and
+	enums, e.g.
+
+	enum class MyEnum { first, second };
+	publisher::put_rec("tag", 42, 347.2, "string", true, MyEnum::second);
+
+	... to retrieve
+
+	auto rec = q.get_rec();
+	auto [a, b, c, d, e] = q.unpack_rec<int, double, string, bool, MyEnum>(rec);
+
 	We wrap up these "higher-order access" functions with the for_each* set of
 	queries... note that these perform the same data presence and validity tests
 	of the try_get* group, but also obviate the need for you to use any explicit
@@ -622,6 +666,22 @@ using rms_pair = std::pair<T, std::string>;
 	"end of data" condition) before reading or "trusting" any new data - THIS is
 	where the [higher-order] try_get* and for_each* come into their own, as they
 	implement the required semantics in their accessing logic.
+
+	* NEW for v3.5: with some revisions to the semaphore accessing logic as well
+	as in the suggested usage model, RMs now allows BOTH multiple queue writers
+	AND multiple queue readers!  See the implementations in RMsCore.cpp of the
+	support routines RMsQueue::{wait_T,wait_any,wait_rec} for actual code, but
+	the key idea is that when you wait on a queue's semaphore, you pass a lambda
+	to it of the [usually small but] important code you want executed when the
+	resource becomes available, BUT STILL UNDER THE SEMAPHORE'S LOCK!
+
+	In case the above is obscure, it is now trivial to create multiple jthreads
+	where each has a body doing something like
+
+	q.for_each_rec([&](auto rec) {
+		const auto [a, b, c] = q.unpack_rec<int, double, long long>(rec);
+		// ... do some work parameterized by the above record fields...
+	});
 */
 class subscription {
 public:
@@ -640,6 +700,7 @@ public:
 	// force discarding of all undelivered messages in queue
 	void flush() noexcept { if (id) ((RMsQueue*)pg2xp(id))->Flush(); }
 	// expose the actual *count* present in the underlying queue object
+	// N.B. - DIRECTLY returns a [possibly negative] difference, use abs as needed
 	constexpr auto peek() const noexcept { return id ? ((RMsQueue*)pg2xp(id))->Peek() : 0; }
 	// return whether there is a message waiting (i.e., would a get* block?)
 	constexpr auto empty() const noexcept { return peek() == 0; }
@@ -695,9 +756,20 @@ public:
 			((RMsQueue*)pg2xp(id))->wait_any(rp.second, rp.first, st);
 		return rp;
 	}
+	// get next INTERNAL RECORD object from queue (blocking)
+	// N.B. - SHOULD not be returned to "user" code
+	// N.B.2 - MOST useful if "expanded" into a tuple by unpack_rec [see below]
+	// N.B.3 - you MUST use unpack_rec... otherwise, RMs objects WILL be leaked
+	rms_ptr_t get_rec(std::stop_token* st = nullptr) {
+		if (std::string tag; id)
+			if (const auto rec = ((RMsQueue*)pg2xp(id))->wait_rec(tag, st); rec != RMsStatusSignaled)
+				return rec;
+		return 0; // (error case: queue isn't open)
+	}
 
 	/*
-		get a "record" of the requested types from queue (blocking)
+		utility fn to "explode" an internal RECORD object into a tuple
+		- upon completion, the internal RECORD object will be properly freed
 
 		Note the use of a "scope guard", one of those super-useful idioms that
 		hasn't yet made it into the standard (after over 20 years)... this one
@@ -706,20 +778,19 @@ public:
 		https://github.com/ricab/scope_guard
 	*/
 	template<typename ...T>
-	constexpr std::tuple <T...> get_rec(std::stop_token* st = nullptr) {
-		if (std::string tag; id) {
-			const auto rec = ((RMsQueue*)pg2xp(id))->wait_rec(tag, st);
+	static constexpr std::tuple <T...> unpack_rec(rms_ptr_t rec) {
+		if (rec != 0) {
 			auto guard = sg::make_scope_guard([rec]() noexcept -> void { rmsRoot->FreeRP(rec); });
 			auto e = (rms_ptr_t*)rp2xp(rec);
 			// (scope guard will free the RMs record AFTER unpacking is complete)
 			return { RMsQueue::getRValue<T>(*e++)... };
 		}
-		return {}; // (error case: queue isn't open)
+		return {}; // (error case: rec is from unopened queue)
 	}
 
-	// utility fn to "explode" an rms_rec (vec of rms_any values) into a tuple
+	// utility fn to "explode" a vec of rms_any values into a tuple
 	template<typename ...T>
-	constexpr std::tuple <T...> unpack_rec(const rms_rec& rec) {
+	static constexpr std::tuple <T...> unpack_any(const rms_rec& rec) {
 		auto e = rec.cbegin();
 		return { std::get<T>(*e++)... };
 	}
@@ -743,62 +814,50 @@ public:
 	constexpr bool try_get_with_tag(rms_pair<T>& p) { return !eod_or_empty() ? p = get_with_tag<T>(), true : false; }
 
 	// get and apply f to FIRST typed DATA item in queue (blocking)
-	template<typename T, class UnaryFunction>
-	constexpr void for_first(UnaryFunction f) { if (T data = get<T>(); !eod()) f(data); }
+	template<typename T, class UnaryFn>
+	constexpr void for_first(UnaryFn f) { if (T data = get<T>(); !eod()) f(data); }
 	// get and apply f to FIRST TAG item in queue (blocking)
-	template<class UnaryFunction>
-	constexpr void for_first_tag(UnaryFunction f) { if (std::string tag = get_tag(); !eod()) f(tag); }
+	template<class UnaryFn>
+	constexpr void for_first_tag(UnaryFn f) { if (std::string tag = get_tag(); !eod()) f(tag); }
 	// get and apply f to FIRST typed DATA item / TAG pair in queue (blocking)
-	template<typename T, class UnaryFunction>
-	constexpr void for_first_with_tag(UnaryFunction f) { if (rms_pair<T> pair = get_with_tag<T>(); !eod()) f(pair); }
+	template<typename T, class UnaryFn>
+	constexpr void for_first_with_tag(UnaryFn f) { if (rms_pair<T> pair = get_with_tag<T>(); !eod()) f(pair); }
 
 	// iterate and apply f to ALL typed DATA items in queue (blocking)
-	template<typename T, class UnaryFunction>
-	constexpr void for_each(UnaryFunction f, std::stop_token* st = nullptr) {
+	template<typename T, class UnaryFn>
+	constexpr void for_each(UnaryFn f, std::stop_token* st = nullptr) {
 		auto stop_requested = [](auto st) {
-			if (st != nullptr)
-				return st->stop_requested();
-			else
-				return false;
+			return st != nullptr ? st->stop_requested() : false;
 		};
 		T data;
 		while (data = get<T>(st), !stop_requested(st) && !eod())
 			f(data);
 	}
-	// iterate and apply f to ALL RECORD DATA items in queue (blocking)
-	template<class UnaryFunction>
-	constexpr void for_each_rec(UnaryFunction f, std::stop_token* st = nullptr) {
+	// iterate and apply f to ALL internal RECORD objects in queue (blocking)
+	template<class UnaryFn>
+	constexpr void for_each_rec(UnaryFn f, std::stop_token* st = nullptr) {
 		auto stop_requested = [](auto st) {
-			if (st != nullptr)
-				return st->stop_requested();
-			else
-				return false;
+			return st != nullptr ? st->stop_requested() : false;
 		};
-		rms_any data{};
-		while (data = get<rms_any>(st), !stop_requested(st) && !eod())
-			f(std::get<rms_rec>(data));
+		rms_ptr_t rec{};
+		while (rec = get_rec(st), !stop_requested(st) && !eod())
+			f(rec);
 	}
 	// iterate and apply f to ALL TAG items in queue (blocking)
-	template<class UnaryFunction>
-	constexpr void for_each_tag(UnaryFunction f, std::stop_token* st = nullptr) {
+	template<class UnaryFn>
+	constexpr void for_each_tag(UnaryFn f, std::stop_token* st = nullptr) {
 		auto stop_requested = [](auto st) {
-			if (st != nullptr)
-				return st->stop_requested();
-			else
-				return false;
+			return st != nullptr ? st->stop_requested() : false;
 		};
 		std::string tag;
 		while (tag = get_tag(st), !stop_requested(st) && !eod())
 			f(tag);
 	}
 	// iterate and apply f to ALL typed DATA item / TAG pairs in queue (blocking)
-	template<typename T, class UnaryFunction>
-	constexpr void for_each_with_tag(UnaryFunction f, std::stop_token* st = nullptr) {
+	template<typename T, class UnaryFn>
+	constexpr void for_each_with_tag(UnaryFn f, std::stop_token* st = nullptr) {
 		auto stop_requested = [](auto st) {
-			if (st != nullptr)
-				return st->stop_requested();
-			else
-				return false;
+			return st != nullptr ? st->stop_requested() : false;
 		};
 		rms_pair<T> pair;
 		while (pair = get_with_tag<T>(st), !stop_requested(st) && !eod())

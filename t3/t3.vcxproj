@@ -167,9 +167,6 @@
     <ClCompile Include="../t3.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\RGlob\RGlobStatic\RGlobStatic.vcxproj">
-      <Project>{4aaa19ad-d112-4954-bf57-e26fb0dc850a}</Project>
-    </ProjectReference>
     <ProjectReference Include="..\RMsStatic\RMsStatic.vcxproj">
       <Project>{eb9ac1ef-a1a2-4445-829c-085afb4a7aef}</Project>
     </ProjectReference>

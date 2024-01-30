@@ -25,5 +25,8 @@
     <ClInclude Include="..\scope_guard.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\RGlob\rglob.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

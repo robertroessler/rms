@@ -1,7 +1,7 @@
 /*
 	RMsCore.cpp - "core" functionality of the RMs messaging system
 
-	Copyright(c) 2004-2023, Robert Roessler
+	Copyright(c) 2004-2024, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -58,10 +58,6 @@ int RMsQueue::NQPage{ 0 };				// # of pages of RMsQueue "extras"
 
 //	control run-time state display and testing
 //	N.B. - typically ALL false in production!!
-constexpr auto qa_dump_all = false;		// (make it easy to turn on ALL display)
-constexpr auto qa_dump_root = qa_dump_all || false;
-constexpr auto qa_dump_queue = qa_dump_all || false;
-
 constexpr auto qa_check_all = false;	// (make it easy to turn on ALL testing)
 constexpr auto qa_check_alloc = qa_check_all || false;
 constexpr auto qa_check_alloc_full = qa_check_all || false;
@@ -411,6 +407,7 @@ void RMsRoot::FreeRP(rms_ptr_t rp) noexcept
 	N.B. - this means perf will be quite good - on tags with at least ONE or
 	more matching subscriptions, not so good if tags are regularly published
 	that have NO matching subscriptions.
+	N.B.2 - call with RMsRoot mutex LOCKED!
 */
 auto RMsRoot::get_matches(std::string_view tag) -> decltype(matches.equal_range(tag))
 {
@@ -585,10 +582,13 @@ void RMsQueue::append(rms_ptr_t tag, rms_ptr_t data)
 	auto guard = sg::make_scope_guard([td]() noexcept -> void { rmsRoot->FreePair(td); });
 	if (state)
 		return;	// early out; "signaled"
-	std::lock_guard acquire(spin);
-	const auto [is_quick, pg, pi] = checkWrite();
-	(is_quick ? quickE[write] : ((pq_pag_t*)pg2xp(pg))->pqTD[pi]) = td,
-		++write, guard.dismiss(), semaphore.signal();
+	else {
+		std::lock_guard acquire(spin);
+		const auto [is_quick, pg, pi] = checkWrite();
+		(is_quick ? quickE[write] : ((pq_pag_t*)pg2xp(pg))->pqTD[pi]) = td,
+			++write, guard.dismiss();
+	}
+	semaphore.signal(); // (ONLY happens if there were NO throws in allocations)
 }
 
 /*
@@ -693,19 +693,16 @@ bool RMsQueue::Validate() const noexcept
 template<rms_out_type T>
 int RMsQueue::wait_T(string& tag, T& data, int flags, std::stop_token* st)
 {
-	if (check_state_wait_state_stop(st))
+	td_pair_t td{};
+	if (check_early_exit_and_wait(st, [this, &td]() { td = get_next_pair_and_remove(); }))
 		return RMsStatusSignaled;	// early out; indicate "signaled"
-	const auto td = next_pair();
 	if (flags & RMsGetTag)
 		tag = getRValue<string>(td.tag);
 	if (flags & RMsGetData)
 		data = getRValue<T>(td.data);
 	// "consume" element
 	rmsRoot->FreePair(td);
-	std::lock_guard<RSpinLock> acquire(spin);
-	if (++read == write)
-		read = 0, write = 0; // reset to "quick" entries when we can
-	return flags;
+	return 0;
 }
 
 // [explicitly] instantiate wait_T for ALL supported data types!
@@ -716,13 +713,13 @@ template int RMsQueue::wait_T(string&, string&, int, std::stop_token*);
 
 /*
 	Supports the sometimes-convoluted accessing of queue elements as "rms_any"
-	variant values, which definitions are enabled by the use of  rva::variant.
+	variant values, which definitions are enabled by the use of rva::variant.
 */
 int RMsQueue::wait_any(string& tag, rms_any& data, std::stop_token* st)
 {
-	if (check_state_wait_state_stop(st))
+	td_pair_t td{};
+	if (check_early_exit_and_wait(st, [this, &td]() { td = get_next_pair_and_remove(); }))
 		return RMsStatusSignaled;	// early out; indicate "signaled"
-	const auto td = next_pair();
 	switch (rp2ty(td.data)) {
 	case RMsType::Int32: data = getRValue<rms_int32>(td.data); break;
 	case RMsType::Int64: data = getRValue<rms_int64>(td.data); break;
@@ -751,9 +748,6 @@ int RMsQueue::wait_any(string& tag, rms_any& data, std::stop_token* st)
 	tag = getRValue<string>(td.tag);
 	// "consume" element
 	rmsRoot->FreePair(td);
-	std::lock_guard<RSpinLock> acquire(spin);
-	if (++read == write)
-		read = 0, write = 0; // reset to "quick" entries when we can
 	return 0;
 }
 
@@ -767,14 +761,11 @@ int RMsQueue::wait_any(string& tag, rms_any& data, std::stop_token* st)
 */
 rms_ptr_t RMsQueue::wait_rec(string& tag, std::stop_token* st)
 {
-	if (check_state_wait_state_stop(st))
+	td_pair_t td{};
+	if (check_early_exit_and_wait(st, [this, &td]() { td = get_next_pair_and_remove(); }))
 		return RMsStatusSignaled;	// early out; indicate "signaled"
-	const auto td = next_pair();
 	tag = getRValue<string>(td.tag);
 	// "consume" element (ONLY the tag just now, we are RETURNING the data)
 	rmsRoot->FreeRP(td.tag);
-	std::lock_guard<RSpinLock> acquire(spin);
-	if (++read == write)
-		read = 0, write = 0; // reset to "quick" entries when we can
 	return td.data; // return the RECORD RMs ptr, MUST BE FREED BY CALLER!
 }

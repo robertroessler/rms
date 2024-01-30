@@ -1,5 +1,7 @@
 # RMs
 
+[![Build status](https://ci.appveyor.com/api/projects/status/kyapnn52369psutv?svg=true)](https://ci.appveyor.com/project/robertroessler/rms)
+
 The RMs (rms) project implements a [reasonably] high-performance multi-threaded
 "pub/sub" messaging system, designed around a shared-memory approach to storing
 messages awaiting delivery.  This was chosen so that multi-process publication
@@ -14,7 +16,7 @@ As things actually worked out, over the decades this package has been in use, th
 "multi-process" aspects of this architecture were never built out, both because
 of the substantially higher costs of resource coordination/locking INTER-process
 *vs* INTRA-process, but more subtly, the paradigm of "many cooperating lightweight
-threads" utlimately seemed more useful than one of "many cooperating heavyweight
+threads" ultimately seemed more useful than one of "many cooperating heavyweight
 processes" - at least on a single machine.
 
 An additional "novel" aspect of RMs (rms) is the actual representation used for
@@ -40,12 +42,16 @@ happens only at the boundaries: when publishing (sending) and receiving messages
 The primary "user" (as well as "developer") documentation for rms is present
 in the rms.h header file.  Note that there is a single [non-system] dependency:
 
-[UTF-8 Pattern-matcher "sibling" project](https://github.com/robertroessler/rglob)
+[UTF-8 Pattern-matcher "sibling" project __rglob__](https://github.com/robertroessler/rglob)
 
 ... the VS2022 project files are expecting RGlob/RMs to be in "sibling" folders,
 with rglob in a folder [roughly] at "../RGlob" - but of course, feel free
 to re-arrange any of the project/folder layout.  And, due to its size, the rglob
 library should (as in the included VS files) likely be kept as a "static" lib.
+
+UPDATE: as of the 3.5 release of rms, the rglob library "dependency" is now a
+"header-only" library, so the above [historical] remarks about "static " libs
+are no longer relevant.
 
 Besides being "pure" C++, the code is believed to be both 32/64 -bit "safe", and
 contains only 2 dependencies on Windows (easily "ported" to other environments):
@@ -62,7 +68,7 @@ supported since very early versions.
 
 ## ToDo (or, "The Future")
 
-Possible items to work on - for myself or collaborators include
+Possible items to work on - for myself or collaborators include (*check* means DONE)
 
 - [ ] while the low-level *public* interface functions (*e.g.*, rms_publish_bytes(),
 rms_peek()) have been unofficially deprecated for some time now, their end-time is
@@ -76,7 +82,7 @@ queues of *any* type: using rms\:\:rms_any (implemented with the C++ std::varian
 data type in advance... useful for things like *loggers* or recording / auditing **all**
 rms message traffic
 
-- [ ] [really "blue-sky"] support some form of either *transactions* or *records* to deal
+- [x] [really "blue-sky"] support some form of either *transactions* or *records* to deal
 with multiple messages that are logically "connected" being interspersed when delivered
 by multiple publishers [to the same message queue]
 
@@ -85,7 +91,7 @@ and to show examples of usage - PARTICULARLY displaying multi-threaded use
 
 - [x] investigating a lightweight (lambda-based?) form of "subscription targets"
 
-- [ ] investigating (probably in a "version 2") a 64-bit version for RMs "pointers"
+- [ ] investigating (probably in a "version 2+") a 64-bit version for RMs "pointers"
 
 - [ ] as only Visual Studio 2022 project and solution files are initially present,
 control files for building in non-Windows environments could be useful

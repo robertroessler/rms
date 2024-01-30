@@ -22,13 +22,16 @@ int main(int argc, char* argv[]) {
 	publisher::put("xyz", string()); // (OK - same result, put_tag is preferred)
 	publisher::put("xyz", 0);
 	publisher::put("xyz", 0.0);
-//	publisher::put("xyz", 0ull); // INVALID @ compile-time
-	publisher::put("xyz", rms_int64(0ull)); // (OK)
+	publisher::put("xyz", 0ull);
+	auto ii = 0;
+	publisher::put("xyz", ii);
+	publisher::put_rec("xyz", ii);
 	s.flush();
 //	publisher::put_rec("x", 0, 0ll, 0.0, "abc", "def"s, nullptr); // INVALID...
-	publisher::put_rec("x", 0, 0xdeadbeefll, 123456789.0e-42, "abc", "def"s);
+	publisher::put_rec("x", 0, 0xdeadbeefull, 123456789.0e-42, "abc", "def"s);
 	// note in the following output the formatting from std::iostream...
-	const auto [a, b, c, d, e] = s.get_rec<int, long long, double, string, string>();
+	const auto rec = s.get_rec();
+	const auto [a, b, c, d, e] = s.unpack_rec<int, long long, double, string, string>(rec);
 	std::cout << "a=" << a << ", b=" << b << ", c=" << c << ", d=" << d << ", e=" << e << std::endl;
 	// ... versus that from rms::to_string - which is using std::to_chars
 	// ... and also "cheats", deliberately choosing base 16 for long long
