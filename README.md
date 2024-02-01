@@ -50,8 +50,13 @@ to re-arrange any of the project/folder layout.  And, due to its size, the rglob
 library should (as in the included VS files) likely be kept as a "static" lib.
 
 UPDATE: as of the 3.5 release of rms, the rglob library "dependency" is now a
-"header-only" library, so the above [historical] remarks about "static " libs
-are no longer relevant.
+"header-only" library, so the above [historical] remarks about "static" libs
+are no longer relevant... and, in fact, both as a nod to the simplicity of use
+/ distribution of "header-only" libs *and* to keep the "CI" system happy, a
+**copy** of "rglob.h" has now been added (in the "git" sense) to the RMs repo.
+Note that as there are no additional updates planned for rglob at this time, it
+may be seen as a "stable" dependency, so that this breaking of any dynamic link
+should not prove problematic - but **YMMV**, of course.
 
 Besides being "pure" C++, the code is believed to be both 32/64 -bit "safe", and
 contains only 2 dependencies on Windows (easily "ported" to other environments):
