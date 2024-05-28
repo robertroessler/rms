@@ -52,6 +52,9 @@ using namespace rms;
 using std::string;
 using std::string_view;
 
+// (the mysterious and magical "overload" template for std::visit())
+template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
+
 char* rms::rmsB{ nullptr };				// shared memory view pointer(s)
 RMsRoot* rms::rmsRoot{ nullptr };		// shared "root" object
 int RMsQueue::NQPage{ 0 };				// # of pages of RMsQueue "extras"
@@ -154,7 +157,7 @@ void rms::initialize(int np)
 	the C++20 std::format package is not required.
 */
 string rms::to_string(const rms_any& v) {
-	auto string_of = [](auto v) -> string {
+	auto string_of = [](rms_num_type auto v) -> string {
 		char b[24];
 		if constexpr (std::same_as<decltype(v), rms_int64>) {
 			// special-case rms_int64, providing "0x..." plus base 16 output
@@ -176,12 +179,13 @@ string rms::to_string(const rms_any& v) {
 				o.append(", "sv).append(to_string(a));
 		return o.append(" ]"sv);
 	};
-	return
-		std::holds_alternative<rms_int32>(v) ? string_of(std::get<rms_int32>(v)) :
-		std::holds_alternative<rms_int64>(v) ? string_of(std::get<rms_int64>(v)) :
-		std::holds_alternative<rms_ieee>(v) ? string_of(std::get<rms_ieee>(v)) :
-		std::holds_alternative<rms_rec>(v) ? explode_rec(std::get<rms_rec>(v)) :
-		std::get<string>(v);
+	return std::visit(overload{
+		[&](rms_int32) { return string_of(std::get<rms_int32>(v)); },
+		[&](rms_int64) { return string_of(std::get<rms_int64>(v)); },
+		[&](rms_ieee) { return string_of(std::get<rms_ieee>(v)); },
+		[&](const string&) { return std::get<string>(v); },
+		[&](const rms_rec&) { return explode_rec(std::get<rms_rec>(v)); }
+	}, v);
 }
 
 inline static bool rms::isValidQueue(int pg)
