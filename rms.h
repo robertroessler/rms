@@ -68,7 +68,7 @@ using rms_intptr = std::intptr_t; // (this MUST resolve to either 'int' or 'long
 	https://github.com/codeinred/recursive-variant
 */
 using rms_any = rva::variant<rms_int32, rms_int64, rms_ieee, std::string, std::vector<rva::self_t>>;
-using rms_rec = std::vector<rms_any>; // (use OUTSIDE of recursive definition)
+using rms_vec = std::vector<rms_any>; // (use OUTSIDE of recursive definition)
 
 //	(allow "our" enums, i.e., based on underlying rms_int32, as well as bools)
 template<class T>
@@ -85,6 +85,8 @@ std::same_as<T, rms_ieee> || rms_int_like<T> ||
 (std::is_integral_v<T> && std::same_as<std::make_signed_t<T>, rms_int64>);
 
 //	(allow "our" string_views and DISALLOW nullptrs)
+//	N.B. - the "nullptr problem" has been "fixed" in c++23; it already made no
+//	sense to construct strings or string_views from nullptrs - now it is ILLEGAL
 template<class T>
 concept rms_string_view =
 !std::same_as<T, nullptr_t> &&
@@ -785,13 +787,13 @@ public:
 			// (scope guard will free the RMs record AFTER unpacking is complete)
 			return { RMsQueue::getRValue<T>(*e++)... };
 		}
-		return {}; // (error case: rec is from unopened queue)
+		return {}; // (error case: rec is from unopened queue or just invalid)
 	}
 
 	// utility fn to "explode" a vec of rms_any values into a tuple
 	template<typename ...T>
-	static constexpr std::tuple <T...> unpack_any(const rms_rec& rec) {
-		auto e = rec.cbegin();
+	static constexpr std::tuple <T...> unpack_any(const rms_vec& vec) {
+		auto e = vec.cbegin();
 		return { std::get<T>(*e++)... };
 	}
 

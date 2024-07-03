@@ -169,10 +169,10 @@ string rms::to_string(const rms_any& v) {
 			return { b, ptr };
 		}
 	};
-	auto explode_rec = [](auto rec) {
+	auto flatten_vec = [](auto vec) {
 		string o;
 		o.reserve(256);
-		for (const auto& a : rec)
+		for (const auto& a : vec)
 			if (o.empty())
 				o.append("[ "sv).append(to_string(a));
 			else
@@ -184,7 +184,7 @@ string rms::to_string(const rms_any& v) {
 		[&](rms_int64) { return string_of(std::get<rms_int64>(v)); },
 		[&](rms_ieee) { return string_of(std::get<rms_ieee>(v)); },
 		[&](const string&) { return std::get<string>(v); },
-		[&](const rms_rec&) { return explode_rec(std::get<rms_rec>(v)); }
+		[&](const rms_vec&) { return flatten_vec(std::get<rms_vec>(v)); }
 	}, v);
 }
 
@@ -482,7 +482,7 @@ rms_ptr_t RMsRoot::MakeRecord(size_t n) {
 }
 
 //	(workhorses for Marshal()... as noted below, will NOT see nullptr_t!)
-static constexpr void rmscpy(rms_ptr_t rp, rms_num_type auto d) {
+static constexpr void rmscpy(rms_ptr_t rp, rms_num_type auto d) noexcept {
 	*(decltype(d)*)rp2xp(rp) = d;
 }
 
@@ -729,8 +729,8 @@ int RMsQueue::wait_any(string& tag, rms_any& data, std::stop_token* st)
 	case RMsType::Int64: data = getRValue<rms_int64>(td.data); break;
 	case RMsType::Ieee: data = getRValue<rms_ieee>(td.data); break;
 	case RMsType::Record: {
-		data = rms_rec();
-		auto& vr = std::get<rms_rec>(data);
+		data = rms_vec();
+		auto& vr = std::get<rms_vec>(data);
 		const auto rec = (rms_ptr_t*)rp2xp(td.data);
 		const auto n = rp2c(td.data);
 		vr.reserve(n);
