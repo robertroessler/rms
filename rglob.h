@@ -464,7 +464,7 @@ class compiler
 		// ... and throw if we don't see one
 		if (close == string::npos)
 			throw std::invalid_argument(string("Missing terminating ']' for character class @ ") + string(pattern.substr(base - pattern.cbegin())));
-		if (all_of(p, p + (close - o), [](char c) { return isascii(c); })) {
+		if (std::all_of(p, p + (close - o), [](char c) { return isascii(c); })) {
 			// the character class is ALL ASCII chars, so we can use the "fast path"
 			emit('{');
 			// (neither "invert" flag nor "length" field are needed for "fast path")

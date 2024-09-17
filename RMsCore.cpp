@@ -188,7 +188,11 @@ string rms::to_string(const rms_any& v) {
 	}, v);
 }
 
-inline static bool rms::isValidQueue(int pg)
+/*
+	Wrapper function for performing [paranoid] checks on the queue identified
+	by 'pg'... most useful during early development of RMs, not so much now.
+*/
+static bool rms::isValidQueue(int pg)
 {
 	if constexpr (qa_check_alloc || qa_check_alloc_full)
 		if (!rmsRoot->CheckAlloc(pg))

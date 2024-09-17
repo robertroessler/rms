@@ -299,6 +299,8 @@ private:
 	RSpinLock mt;						// mutex for above
 };
 
+static bool isValidQueue(int pg);
+
 /*
 	RMsRoot is the central controlling object of the RMs message system, with
 	the primary tasks of allocating and freeing all memory from our page pool,
