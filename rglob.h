@@ -727,7 +727,7 @@ public:
 					// (consume target code point(s) and skip to after the ']')
 					++ti, mi += 32;
 				} else {
-					auto i = find_if(ti, utf8iterator(target.cend()), [=](char32_t tx) { return isascii(tx) && testPackedBitsetAt(mi, tx); });
+					auto i = std::find_if(ti, utf8iterator(target.cend()), [=](char32_t tx) { return isascii(tx) && testPackedBitsetAt(mi, tx); });
 					if (i == target.cend())
 						return false;
 					// (consume target code point(s) and skip to after the ']')
@@ -742,7 +742,7 @@ public:
 						// (consume target code point(s) and skip to after the ']')
 						++ti, mi = next;
 				} else {
-					auto i = find_if(ti, utf8iterator(target.cend()), [=](char32_t tx) { return (p == tx) == !invert; });
+					auto i = std::find_if(ti, utf8iterator(target.cend()), [=](char32_t tx) { return (p == tx) == !invert; });
 					if (i != target.cend())
 						// (consume target code point(s) and skip to after the ']')
 						ti = ++i, anchored = true, mi = next;
@@ -758,7 +758,7 @@ public:
 						// (consume target code point(s) and skip to after the ']')
 						++ti, mi = next;
 				} else {
-					auto i = find_if(ti, utf8iterator(target.cend()), [=](char32_t tx) { return (p1 <= tx && tx <= p2) == !invert; });
+					auto i = std::find_if(ti, utf8iterator(target.cend()), [=](char32_t tx) { return (p1 <= tx && tx <= p2) == !invert; });
 					if (i != target.cend())
 						// (consume target code point(s) and skip to after the ']')
 						ti = ++i, anchored = true, mi = next;

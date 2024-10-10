@@ -1,9 +1,7 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.33530.505
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RMsDLL", "RMsDLL\RMsDLL.vcxproj", "{AB8DCC85-A131-4AC4-847E-795A821FAE17}"
-EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RMsStatic", "RMsStatic\RMsStatic.vcxproj", "{EB9AC1EF-A1A2-4445-829C-085AFB4A7AEF}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "t2", "t2\t2.vcxproj", "{24FBC7FA-D261-4332-823A-DBFDA6D875E0}"
@@ -20,14 +18,6 @@ Global
 		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{AB8DCC85-A131-4AC4-847E-795A821FAE17}.Debug|x64.ActiveCfg = Debug|x64
-		{AB8DCC85-A131-4AC4-847E-795A821FAE17}.Debug|x64.Build.0 = Debug|x64
-		{AB8DCC85-A131-4AC4-847E-795A821FAE17}.Debug|x86.ActiveCfg = Debug|Win32
-		{AB8DCC85-A131-4AC4-847E-795A821FAE17}.Debug|x86.Build.0 = Debug|Win32
-		{AB8DCC85-A131-4AC4-847E-795A821FAE17}.Release|x64.ActiveCfg = Release|x64
-		{AB8DCC85-A131-4AC4-847E-795A821FAE17}.Release|x64.Build.0 = Release|x64
-		{AB8DCC85-A131-4AC4-847E-795A821FAE17}.Release|x86.ActiveCfg = Release|Win32
-		{AB8DCC85-A131-4AC4-847E-795A821FAE17}.Release|x86.Build.0 = Release|Win32
 		{EB9AC1EF-A1A2-4445-829C-085AFB4A7AEF}.Debug|x64.ActiveCfg = Debug|x64
 		{EB9AC1EF-A1A2-4445-829C-085AFB4A7AEF}.Debug|x64.Build.0 = Debug|x64
 		{EB9AC1EF-A1A2-4445-829C-085AFB4A7AEF}.Debug|x86.ActiveCfg = Debug|Win32

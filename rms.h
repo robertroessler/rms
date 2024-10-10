@@ -42,12 +42,6 @@
 #include "variant.hpp"
 #include "scope_guard.hpp"
 
-#ifdef RMSDLL_EXPORTS
-#define RMS_EXPORT extern "C" __declspec(dllexport)
-#else
-#define RMS_EXPORT extern "C"
-#endif
-
 //	the RMs "primitive" data types
 using rms_ieee = double;
 using rms_int32 = int;
@@ -200,16 +194,16 @@ constexpr size_t rp2n(rms_ptr_t rp) noexcept {
 }
 
 //	RMs ptr -> # of in-use RECORD slots
-constexpr size_t rp2c(rms_ptr_t rp) noexcept { return rp2n(rp) / sizeof rms_ptr_t; }
+constexpr size_t rp2c(rms_ptr_t rp) noexcept { return rp2n(rp) / sizeof(rms_ptr_t); }
 
 //	exposed [H/W] ptr -> RMs page
-constexpr int xp2pg(void* xp) noexcept { return (int)((char*)xp - rmsB) >> 12; }
+inline int xp2pg(void* xp) noexcept { return (int)((char*)xp - rmsB) >> 12; }
 
 //	RMs page -> exposed [H/W] ptr
-constexpr void* pg2xp(int pg) noexcept { return rmsB + (ptrdiff_t(pg) << 12); }
+inline void* pg2xp(int pg) noexcept { return rmsB + (ptrdiff_t(pg) << 12); }
 
 //	RMs ptr -> exposed [H/W] ptr
-constexpr void* rp2xp(rms_ptr_t rp) noexcept {
+inline void* rp2xp(rms_ptr_t rp) noexcept {
 	const auto pg = rp >> 16;
 	const auto po = rp & (~((2 << ty2logM1(rp2ty(rp))) - 1) & 0x0fff);
 	return (char*)pg2xp(pg) + po;
@@ -232,7 +226,7 @@ public:
 
 //	Recursive spinlock class
 class RSpinLockEx {
-	static constexpr std::thread::id nobody{};
+	static inline const std::thread::id nobody{};
 
 public:
 	RSpinLockEx() : owner{ nobody } {}
@@ -336,16 +330,16 @@ private:
 
 	// Link RMs ptr at front of typed free list
 	// N.B. - Call with RMsRoot mutex LOCKED!
-	void constexpr free_rp(rms_ptr_t rp) noexcept {
+	void inline free_rp(rms_ptr_t rp) noexcept {
 		const auto ty = rp2ty(rp);
 		*(int*)rp2xp(rp) = typeFree[(int)ty], typeFree[(int)ty] = rp;
 	}
 	// INDIVIDUALLY free RMs ptrs in active RECORD slots
 	// N.B. - Call with RMsRoot mutex LOCKED!
-	void constexpr free_rec(rms_ptr_t rp) noexcept {
+	void inline free_rec(rms_ptr_t rp) noexcept {
 		const auto rec = (rms_ptr_t*)rp2xp(rp);
 		const auto n = rp2c(rp);
-		for (auto i = 0; i < n; ++i)
+		for (std::remove_const_t<decltype(n)> i = 0; i < n; ++i)
 			free_rp(rec[i]);
 	}
 	// N.B. - Call with RMsRoot mutex LOCKED!
@@ -556,7 +550,7 @@ class publisher {
 
 	static void publish(std::string_view t, nullptr_t d) { rmsRoot->Distribute(t, nullptr); }
 
-	static constexpr void publish_rec(std::string_view t, rms_mid_type auto&& ...d) {
+	static inline void publish_rec(std::string_view t, rms_mid_type auto&& ...d) {
 		std::lock_guard acquire(rmsRoot->spin);
 		auto tqp = rmsRoot->get_matches(t);
 		// deliver to ALL cached tag->queue pairs which [now] match

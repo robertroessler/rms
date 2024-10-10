@@ -478,9 +478,9 @@ void RMsRoot::initTypedPageAsFree(int pg, RMsType ty) noexcept
 */
 rms_ptr_t RMsRoot::MakeRecord(size_t n) {
 	constexpr auto nn = 2u << ty2logM1(RMsType::Record);
-	if (nn < n * sizeof rms_ptr_t)
+	if (nn < n * sizeof(rms_ptr_t))
 		throw std::bad_array_new_length();
-	const auto rp = AllocRP(RMsType::Record, n * sizeof rms_ptr_t);
+	const auto rp = AllocRP(RMsType::Record, n * sizeof(rms_ptr_t));
 	std::memset(rp2xp(rp), 0, nn);
 	return rp;
 }
@@ -738,7 +738,7 @@ int RMsQueue::wait_any(string& tag, rms_any& data, std::stop_token* st)
 		const auto rec = (rms_ptr_t*)rp2xp(td.data);
 		const auto n = rp2c(td.data);
 		vr.reserve(n);
-		for (auto i = 0; i < n; ++i)
+		for (std::remove_const_t<decltype(n)> i = 0; i < n; ++i)
 			switch (const auto v = rec[i]; rp2ty(v)) {
 			case RMsType::Int32: vr.emplace_back(getRValue<rms_int32>(v)); break;
 			case RMsType::Int64: vr.emplace_back(getRValue<rms_int64>(v)); break;

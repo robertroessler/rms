@@ -204,7 +204,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\RGlob\rglob.h" />
+    <ClInclude Include="..\rglob.h" />
     <ClInclude Include="..\rms.h" />
     <ClInclude Include="..\scope_guard.hpp" />
     <ClInclude Include="..\variant.hpp" />
