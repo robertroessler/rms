@@ -85,7 +85,9 @@ constexpr auto qa_check_nothing = !(qa_check_alloc || qa_check_alloc_full || qa_
 	different virtual address mapping for this storage.
 
 	The requested amount of virtual storage is "reserved", with the actual
-	"commits" occurring in units of "rms::PageIncrement" pages (currently 16).
+	"commits" occurring in units of "rms::PageIncrement" pages (currently 16).*
+
+	* - in NON-Windows environments, ALL 'np' pages are mapped in initialize!
 */
 void rms::initialize(int np)
 {
@@ -120,23 +122,31 @@ void rms::initialize(int np)
 		}
 	}
 #else
-	auto fd = shm_open("/rhps_rms_shared", O_CREAT | O_TRUNC | O_RDWR, 0666);
+	// (do "gratuitous" unlink in case of [previous] bad shutdown!)
+	// N.B. - presumably a Bad Thing(tm) if any other RMs-using apps are ACTIVE!
+	shm_unlink("/rhps_rms_shared");
+	const auto fd = shm_open("/rhps_rms_shared", O_CREAT | O_RDWR);
 	if (fd == -1)
 		throw std::bad_alloc();
-	auto stat = ftruncate(fd, np * 4096);
-	if (stat != 0)
+	const auto stat = ftruncate(fd, off_t(np * 4096));
+	const auto fTE = errno;
+	if (stat != 0 && fTE != EINVAL)
 		throw std::bad_alloc();
+	// [attempt to] map ALL pages
 	rmsB = (char*)mmap(0, np * 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	close(fd);
 	if (rmsB == MAP_FAILED)
 		throw std::runtime_error("rms::initialize failed in ::mmap()");
-	// use "placement" new!
-	new(rmsB) RMsRoot();
-	rmsRoot = (RMsRoot*)rmsB;
-	if (!rmsRoot->Initialize(np)) {
-		munmap(rmsB, np * 4096), rmsB = nullptr;
-		shm_unlink("rhps_rms_shared");
-		throw std::runtime_error("rms::initialize failed in RMsRoot::Initialize()");
+	// init mapping AS REQUIRED
+	if (fTE != EINVAL) {
+		// use "placement" new!
+		new(rmsB) RMsRoot();
+		rmsRoot = (RMsRoot*)rmsB;
+		if (!rmsRoot->Initialize(np)) {
+			munmap(rmsB, np * 4096), rmsB = nullptr;
+			shm_unlink("/rhps_rms_shared");
+			throw std::runtime_error("rms::initialize failed in RMsRoot::Initialize()");
+		}
 	}
 #endif
 	// verify [expected] invariants
@@ -359,7 +369,7 @@ void RMsRoot::Distribute(string_view tag, rms_max_type auto d)
 		((RMsQueue*)pg2xp(i->second))->Append(tag, d);
 }
 
-// [explicitly] instantiate Distribute (and Append and Marshal)
+// [explicitly] instantiate Distribute (Append and Marshal still need this)
 // for ALL supported data types!
 template void RMsRoot::Distribute(string_view, rms_int32);
 template void RMsRoot::Distribute(string_view, rms_int64);
@@ -417,7 +427,7 @@ void RMsRoot::FreeRP(rms_ptr_t rp) noexcept
 	that have NO matching subscriptions.
 	N.B.2 - call with RMsRoot mutex LOCKED!
 */
-auto RMsRoot::get_matches(std::string_view tag) -> decltype(matches.equal_range(tag))
+auto RMsRoot::get_matches(string_view tag) -> decltype(matches.equal_range(tag))
 {
 	auto tqp = matches.equal_range(tag);
 	if (tqp.first == tqp.second) {
@@ -507,6 +517,13 @@ rms_ptr_t RMsRoot::Marshal(rms_mid_type auto d)
 	return rp;
 }
 
+// [explicitly] instantiate Marshal (Append still needs this)
+// for ALL supported data types!
+template rms_ptr_t RMsRoot::Marshal(rms_int32);
+template rms_ptr_t RMsRoot::Marshal(rms_int64);
+template rms_ptr_t RMsRoot::Marshal(rms_ieee);
+template rms_ptr_t RMsRoot::Marshal(string_view);
+
 /*
 	Remove the supplied page from the list of active [subscription] queues.
 
@@ -550,7 +567,7 @@ RMsQueue::~RMsQueue()
 
 	N.B. - no need to acquire the mutex lock at THIS level of processing
 */
-void RMsQueue::Append(std::string_view tag, rms_mid_type auto d)
+void RMsQueue::Append(string_view tag, rms_mid_type auto d)
 {
 	const auto tRP = rmsRoot->Marshal(tag);
 	rms_ptr_t dRP{};
@@ -559,10 +576,16 @@ void RMsQueue::Append(std::string_view tag, rms_mid_type auto d)
 	append(tRP, dRP);
 }
 
+// [explicitly] instantiate Append for ALL supported data types!
+template void RMsQueue::Append(string_view, rms_int32);
+template void RMsQueue::Append(string_view, rms_int64);
+template void RMsQueue::Append(string_view, rms_ieee);
+template void RMsQueue::Append(string_view, string_view);
+
 /*
 	Append [overload] supporting publisher::put_tag.
 */
-void RMsQueue::Append(std::string_view tag, nullptr_t d)
+void RMsQueue::Append(string_view tag, nullptr_t d)
 {
 	const auto tRP = rmsRoot->Marshal(tag);
 	append(tRP, 0);
@@ -573,7 +596,7 @@ void RMsQueue::Append(std::string_view tag, nullptr_t d)
 
 	N.B. - the supplied "data" RMs ptr is already marshaled!
 */
-void RMsQueue::Append(std::string_view tag, rms_ptr_t dRP)
+void RMsQueue::Append(string_view tag, rms_ptr_t dRP)
 {
 	const auto tRP = rmsRoot->Marshal(tag);
 	append(tRP, dRP);
