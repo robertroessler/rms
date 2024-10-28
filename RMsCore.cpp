@@ -125,7 +125,7 @@ void rms::initialize(int np)
 	// (do "gratuitous" unlink in case of [previous] bad shutdown!)
 	// N.B. - presumably a Bad Thing(tm) if any other RMs-using apps are ACTIVE!
 	shm_unlink("/rhps_rms_shared");
-	const auto fd = shm_open("/rhps_rms_shared", O_CREAT | O_RDWR);
+	const auto fd = shm_open("/rhps_rms_shared", O_CREAT | O_RDWR, 0666);
 	if (fd == -1)
 		throw std::bad_alloc();
 	const auto stat = ftruncate(fd, off_t(np * 4096));
@@ -719,7 +719,7 @@ bool RMsQueue::Validate() const noexcept
 
 /*
 	Supports the older-style explicit "data and/or tag" -style get, which is
-	still used by some of the subscriber class get variants for simple vals.
+	still used by some of the subscription class get variants for simple vals.
 */
 template<rms_out_type T>
 int RMsQueue::wait_T(string& tag, T& data, int flags, std::stop_token* st)
