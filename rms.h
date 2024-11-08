@@ -39,12 +39,17 @@
 #include <variant>
 #include <map>
 #include <vector>
+#include <cstdint>
 #include "variant.hpp"
 #include "scope_guard.hpp"
 
 //	the RMs "primitive" data types
 using rms_ieee = double;
-using rms_int32 = int;
+// make SURE that *our* expected 32-bit ints really ARE!
+using rms_int32 = int32_t;
+// retain "simple" SAFE access to 32-bit ints, for user/client code ONLY
+using rms_int = rms_int32;
+// we EXPECT that rms_int64 is ALWAYS equivalent to a long long
 using rms_int64 = long long;
 using rms_intptr = std::intptr_t; // (this MUST resolve to either 'int' or 'long long'!)
 
