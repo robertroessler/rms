@@ -140,10 +140,10 @@ enum {
 //	# of [4KB] pages to commit at each growth
 constexpr auto PageIncrement = 16;
 
-constexpr auto RootMagic = 0x52734d52;	// ('RMsR')
-constexpr auto QueueMagic = 0x51734d52;	// ('RMsQ')
+constexpr auto RootMagic = (rms_int32)0x52734d52;	// ('RMsR')
+constexpr auto QueueMagic = (rms_int32)0x51734d52;	// ('RMsQ')
 
-using rms_ptr_t = unsigned int;			// [RMs] ptr type
+using rms_ptr_t = uint32_t;				// [RMs] INTERNAL ptr type != rms_intptr
 
 //	RMs tag/data pair (data may be empty)
 using td_pair_t = struct {
@@ -337,7 +337,7 @@ private:
 	// N.B. - Call with RMsRoot mutex LOCKED!
 	void inline free_rp(rms_ptr_t rp) noexcept {
 		const auto ty = rp2ty(rp);
-		*(int*)rp2xp(rp) = typeFree[(int)ty], typeFree[(int)ty] = rp;
+		*(rms_ptr_t*)rp2xp(rp) = typeFree[(int)ty], typeFree[(int)ty] = rp;
 	}
 	// INDIVIDUALLY free RMs ptrs in active RECORD slots
 	// N.B. - Call with RMsRoot mutex LOCKED!
@@ -350,7 +350,7 @@ private:
 	// N.B. - Call with RMsRoot mutex LOCKED!
 	void initTypedPageAsFree(int pg, RMsType ty) noexcept;
 
-	int magic{ RootMagic };				// root magic number ('RMsR')
+	rms_int32 magic{ RootMagic };		// root magic number ('RMsR')
 	RSpinLockEx spin;					// root [recursive] spinlock
 										// accelerator for tag->lookups
 	std::multimap<std::string, int, std::less<>> matches;
@@ -480,7 +480,7 @@ private:
 	// (specialized wait used ONLY for records)
 	rms_ptr_t wait_rec(std::string& tag, std::stop_token* st = nullptr);
 
-	std::atomic<int> magic{ QueueMagic };// our magic number ('RMsQ')
+	std::atomic<rms_int32> magic{ QueueMagic };// our magic number ('RMsQ')
 	RSpinLock spin;						// our spinlock
 	RSemaphore semaphore;				// our semaphore
 	rms_ptr_t pattern{};				// our [compiled] pattern
