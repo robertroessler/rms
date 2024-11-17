@@ -80,7 +80,7 @@ int main(int argc, char* argv[])
 				// N.B. - *much* better for anything other than SINGLE producers
 				// and/or consumers of pub/sub data streams!
 				const auto rec = sub.get_rec();
-				const auto [p, q, r] = sub.unpack_rec<long long, rms_int, double>(rec);
+				const auto [p, q, r] = sub.unpack_rec<long long, int, double>(rec);
 				sum += p + q + (long long)r;
 			}
 			if constexpr (qa_multi_q_bare)

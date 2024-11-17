@@ -45,11 +45,11 @@
 
 //	the RMs "primitive" data types
 using rms_ieee = double;
-// make SURE that *our* expected 32-bit ints really ARE!
+//	make SURE that *our* expected 32-bit ints really ARE!
 using rms_int32 = int32_t;
-// retain "simple" SAFE access to 32-bit ints, for user/client code ONLY
+//	retain "simple" SAFE access to 32-bit ints, for user/client code ONLY
 using rms_int = rms_int32;
-// we EXPECT that rms_int64 is ALWAYS equivalent to a long long
+//	we EXPECT that rms_int64 is ALWAYS equivalent to a long long
 using rms_int64 = long long;
 using rms_intptr = std::intptr_t; // (this MUST resolve to either 'int' or 'long long'!)
 
@@ -69,19 +69,15 @@ using rms_intptr = std::intptr_t; // (this MUST resolve to either 'int' or 'long
 using rms_any = rva::variant<rms_int32, rms_int64, rms_ieee, std::string, std::vector<rva::self_t>>;
 using rms_vec = std::vector<rms_any>; // (use OUTSIDE of recursive definition)
 
-//	(allow "our" enums, i.e., based on underlying rms_int32, as well as bools)
-template<class T>
-concept rms_int_like =
-(std::is_enum_v<T> &&
-std::same_as<std::underlying_type_t<T>, rms_int32>) ||
-std::same_as<T, bool>;
-
 //	(allow "our" numbers)
+//	N.B. - ONLY allow doubles, integrals (+bools, -nullptr_t vals), and enums,
+//	noting the C++ standard says "new" [class] enums *are* ints, but both they
+//	as well as "classic" enums can be explicitly specified to be any integrals
 template<class T>
 concept rms_num_type =
-std::same_as<T, rms_ieee> || rms_int_like<T> ||
-(std::is_integral_v<T> && std::same_as<std::make_signed_t<T>, rms_int32>) ||
-(std::is_integral_v<T> && std::same_as<std::make_signed_t<T>, rms_int64>);
+std::same_as<T, rms_ieee> ||
+(std::is_integral_v<T> && sizeof(T) <= 8 && !std::same_as<T, nullptr_t>) ||
+(std::is_enum_v<T> && sizeof(std::underlying_type_t<T>) <= 8);
 
 //	(allow "our" string_views and DISALLOW nullptrs)
 //	N.B. - the "nullptr problem" has been "fixed" in c++23; it already made no
@@ -161,12 +157,11 @@ extern int is_valid_queue(int id);
 constexpr RMsType rp2ty(rms_ptr_t rp) noexcept { return (RMsType)((rp >> 12) & 0x0f); }
 
 //	[byte] length -> RMs [string] type coding
-constexpr RMsType n2ty(int nn) noexcept {
-	auto i = 1;
-	for (; i < 11; ++i)
-		if ((unsigned)nn <= (2u << i))
-			break;
-	return (RMsType)i;
+constexpr RMsType n2ty(unsigned nn) noexcept {
+	for (auto i{ 1 }; i < 11; ++i)
+		if (nn <= (2u << i))
+			return (RMsType)i;
+	return (RMsType)11;
 }
 
 //	RMs type -> (binary logarithm of type's [max] length) - 1
@@ -528,23 +523,22 @@ class publisher {
 	static constexpr auto ty_of(rms_int64 v) noexcept { return RMsType::Int64; }
 	template<>
 	static constexpr auto ty_of(rms_ieee v) noexcept { return RMsType::Ieee; }
-	//rms_intptr already handled above as EITHER rms_int32 OR rms_int64
+	// rms_intptr already handled above as EITHER rms_int32 OR rms_int64
 
 	// (n_of() will NOT see a nullptr_t)
 	static constexpr auto n_of(rms_num_type auto v) noexcept { return sizeof v; }
 
 	static constexpr auto n_of(std::string_view v) noexcept { return v.size(); }
 
-	// (make SURE any marshaling will store enums / bools as rms_int32 values)
-	static constexpr auto coerce(rms_int_like auto v) noexcept { return (rms_int32)v; }
-
-	// (make SURE any marshaling will store integrals as rms_int32/rms_int64!)
+	// (make SURE any marshaling will store integrals as rms_int{32,64}!)
 	static constexpr auto coerce(rms_num_type auto v) noexcept {
 		using t = decltype(v);
 		if constexpr (std::same_as<t, rms_ieee>)
 			return v;
+		else if constexpr (sizeof(t) <= 4)
+			return (rms_int32)v;
 		else
-			return (std::make_signed_t<t>)v;
+			return (rms_int64)v;
 	}
 
 	static constexpr auto coerce(std::string_view v) noexcept { return v; }
@@ -585,7 +579,7 @@ public:
 	static void put_tag(std::string_view t) { publish(t, nullptr); }
 };
 
-// alias template for RMs data/tag pairs (tag is ALWAYS a std::string)
+//	alias template for RMs data/tag pairs (tag is ALWAYS a std::string)
 template<typename T>
 using rms_pair = std::pair<T, std::string>;
 
@@ -791,7 +785,12 @@ public:
 		return {}; // (error case: rec is from unopened queue or just invalid)
 	}
 
-	// utility fn to "explode" a vec of rms_any values into a tuple
+	/*
+		utility fn to "explode" a vec of rms_any values into a tuple
+
+		Note that this represents something of an evolutionary dead-end, replaced
+		typically by the more useful and flexible put_rec / get_rec / unpack_rec.
+	*/
 	template<typename ...T>
 	static constexpr std::tuple <T...> unpack_any(const rms_vec& vec) {
 		auto e = vec.cbegin();
